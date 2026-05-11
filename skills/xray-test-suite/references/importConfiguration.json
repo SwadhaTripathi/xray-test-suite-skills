@@ -1,10 +1,12 @@
 {
     "_comment": "Xray Cloud Test Case Importer field-mapping config. Column INDEX is the source of truth (not header text). Modify with care — Step 6 of the skill workflow reads this to determine CSV column order.",
+    "_epicLinkNote": "customfield_10014 (Epic Link) is registered at column.index 8 for documentation. Xray's CSV Importer does not expose Epic Link as a CSV-mappable target on this tenant — it will be ignored during the wizard's Map Fields step. The working pattern is to patch Epic Link AFTER import via mcp__atlassian__editJiraIssue (see generate-xray-test.md Step 5.2). Verified working: smoke test created FIFAGEN-15565 → patched customfield_10014 to FIFAGEN-10400 successfully.",
+    "_manualTestStepsNote": "customfield_11985 (Manual Test Steps) is registered at column.index 9 for downstream tooling discovery. It is an ADF field — not populated via CSV. The post-import workflow (generate-xray-test.md Step 5.3) sets it via mcp__atlassian__editJiraIssue with an ADF-formatted body.",
 
     "config.encoding": "UTF-8",
     "config.delimiter": ",",
     "config.project.from.csv": false,
-    "config.project.key": "FIFA Genesis",
+    "config.project.key": "FIFAGEN",
     "config.list.delimiter": ";",
     "config.date.format": "DD/MM/YYYY HH:mm",
     "config.create.test.repository.folders": true,
@@ -62,6 +64,30 @@
             "jira.field": {
                 "group": "Xray",
                 "id": "xray_testtype",
+                "type": "string"
+            }
+        },
+        {
+            "column.index": 7,
+            "jira.field": {
+                "group": "Xray Test Step Fields",
+                "id": "__xray_step_number",
+                "type": "string"
+            }
+        },
+        {
+            "column.index": 8,
+            "jira.field": {
+                "group": "Custom Fields",
+                "id": "customfield_10014",
+                "type": "string"
+            }
+        },
+        {
+            "column.index": 9,
+            "jira.field": {
+                "group": "Custom Fields",
+                "id": "customfield_11985",
                 "type": "string"
             }
         }
