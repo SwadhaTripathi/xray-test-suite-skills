@@ -1,15 +1,15 @@
 # Real configuration with tenant-specific values
-references/config.json
+skills/xray-test-suite/references/config.json
 
 # Generated test case CSVs
-output/*.csv
-!output/.gitkeep
+skills/xray-test-suite/output/*.csv
+!skills/xray-test-suite/output/.gitkeep
 
 # Local credentials should never be in this folder anyway, but be defensive
 credentials.json
 .xray-credentials.json
 *.credentials.json
-!references/credentials.sample.json
+!skills/xray-test-suite/references/credentials.sample.json
 
 # OS artifacts
 .DS_Store

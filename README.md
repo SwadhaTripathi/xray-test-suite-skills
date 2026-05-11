@@ -1,8 +1,8 @@
 # xray-test-suite
 
-A distributable [Claude Code](https://claude.com/claude-code) skill for authoring Xray test cases end-to-end: parse requirements, generate a categorized test matrix, and deliver as **CSV import file**, **direct Jira API creation**, or both.
+A [Claude Code](https://claude.com/claude-code) **plugin** that bundles a skill + slash command for authoring Xray test cases end-to-end: parse requirements, generate a categorized test matrix, and deliver as **CSV import file**, **direct Jira API creation**, or both.
 
-> **New here? Start with [`initial_setup.md`](initial_setup.md)** — a ~15-minute walkthrough from cloning this repo to your first test generation.
+> **New here? Start with [`initial_setup.md`](initial_setup.md)** — a ~10-minute walkthrough from installing the plugin to running your first test generation.
 
 ---
 
@@ -20,13 +20,16 @@ You stay in control — nothing is written to Jira until you explicitly approve.
 
 ---
 
-## Install
+## Install (Claude Code plugin)
 
-```bash
-git clone https://github.com/SwadhaTripathi/xray-test-suite-skills.git ~/.claude/skills/xray-test-suite
+```text
+/plugin marketplace add SwadhaTripathi/xray-test-suite-skills
+/plugin install xray-test-suite
 ```
 
-Then follow [`initial_setup.md`](initial_setup.md) for configuration (~10 min: copy two `.sample.json` files, fill in values, dry-run).
+After install, restart your Claude Code session. The `/xray-tests` slash command and the `xray-test-suite` skill become available.
+
+Then follow [`initial_setup.md`](initial_setup.md) for first-time configuration (~10 min: copy two `.sample.json` files, fill in values, dry-run).
 
 ## Run
 
@@ -37,18 +40,31 @@ Then follow [`initial_setup.md`](initial_setup.md) for configuration (~10 min: c
 
 ---
 
-## Repo layout
+## Plugin layout
 
-| Path | Purpose |
-|------|---------|
-| [`SKILL.md`](SKILL.md) | The workflow Claude follows (9 steps) |
-| [`initial_setup.md`](initial_setup.md) | First-time setup walkthrough |
-| [`references/README.md`](references/README.md) | Config-field reference for users already familiar with the flow |
-| [`references/config.sample.json`](references/config.sample.json) | Routing template — placeholders only |
-| [`references/credentials.sample.json`](references/credentials.sample.json) | Secrets template — placeholders only |
-| [`references/importConfiguration.json`](references/importConfiguration.json) | Xray CSV column→field mapping (authoritative) |
-| [`examples/sample-requirements.md`](examples/sample-requirements.md) | Tiny sample to verify end-to-end |
-| `output/` | Generated CSVs land here (gitignored) |
+```
+xray-test-suite-skills/
+├── .claude-plugin/
+│   ├── plugin.json                          # plugin manifest
+│   └── marketplace.json                     # single-plugin marketplace manifest
+├── skills/
+│   └── xray-test-suite/
+│       ├── SKILL.md                         # workflow Claude follows (9 steps)
+│       ├── references/
+│       │   ├── README.md                    # config field reference
+│       │   ├── config.sample.json           # routing template (placeholders)
+│       │   ├── credentials.sample.json      # secrets template (placeholders)
+│       │   └── importConfiguration.json     # Xray CSV column → field mapping
+│       └── output/
+│           └── .gitkeep                     # generated CSVs land here (gitignored)
+├── commands/
+│   └── xray-tests.md                        # /xray-tests slash command
+├── examples/
+│   └── sample-requirements.md               # tiny sample for end-to-end testing
+├── README.md                                # this file
+├── initial_setup.md                         # first-time setup guide
+└── .gitignore
+```
 
 ---
 
@@ -56,12 +72,12 @@ Then follow [`initial_setup.md`](initial_setup.md) for configuration (~10 min: c
 
 | Where | What | Committed? |
 |-------|------|-----------|
-| `references/*.sample.json` | Templates with placeholder values | YES |
-| `references/config.json` | Your tenant routing (no secrets) | NO — gitignored |
-| `~/.claude/.xray-credentials.json` | API tokens & Xray Cloud client secret | NO — lives outside the repo |
-| `output/*.csv` | Generated test case CSVs | NO — gitignored |
+| `skills/xray-test-suite/references/*.sample.json` | Templates with placeholder values | YES |
+| `skills/xray-test-suite/references/config.json` | Your tenant routing (no secrets) | NO — gitignored |
+| `~/.claude/.xray-credentials.json` | API tokens & Xray Cloud client secret | NO — lives outside the plugin |
+| `skills/xray-test-suite/output/*.csv` | Generated test case CSVs | NO — gitignored |
 
-The `.gitignore` and the "credentials outside the skill" pattern together ensure a `git push` cannot leak real secrets.
+The `.gitignore` and the "credentials outside the plugin" pattern together ensure a `git push` cannot leak real secrets.
 
 ---
 

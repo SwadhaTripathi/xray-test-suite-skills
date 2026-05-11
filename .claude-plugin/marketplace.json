@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "xray-test-suite-skills",
+  "description": "Single-plugin marketplace hosting the xray-test-suite plugin: a Claude Code workflow for generating Xray test cases from requirements and importing them via CSV or Atlassian API.",
+  "owner": {
+    "name": "Swadha Tripathi"
+  },
+  "plugins": [
+    {
+      "name": "xray-test-suite",
+      "description": "Generate Xray test cases end-to-end: parse requirements, present test matrix, deliver as CSV import file, direct Jira API creation, or both. Includes the /xray-tests slash command.",
+      "author": {
+        "name": "Swadha Tripathi"
+      },
+      "category": "testing",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/SwadhaTripathi/xray-test-suite-skills.git"
+      },
+      "homepage": "https://github.com/SwadhaTripathi/xray-test-suite-skills"
+    }
+  ]
+}

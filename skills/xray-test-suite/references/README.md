@@ -1,13 +1,17 @@
-# xray-test-suite — Setup
+# xray-test-suite — Setup (config reference)
 
-First-time configuration for a fresh clone. Two files to create, both from the included `.sample.json` templates.
+Tight reference for users already familiar with the workflow. For a full first-time walkthrough, see [`initial_setup.md`](../../../initial_setup.md) at the plugin root.
+
+Two files to create, both from the included `.sample.json` templates.
 
 ---
 
-## 1. Routing config (inside the skill folder)
+## 1. Routing config (inside the plugin folder)
+
+Locate the installed plugin folder with `/plugin info xray-test-suite`, then:
 
 ```bash
-cd ~/.claude/skills/xray-test-suite/references
+cd <PLUGIN_DIR>/skills/xray-test-suite/references
 cp config.sample.json config.json
 ```
 
@@ -66,21 +70,28 @@ The skill will read both configs and report any missing fields or broken paths.
 
 ---
 
-## File map
+## File map (within the plugin)
 
 ```
-xray-test-suite/
-├── SKILL.md                          # workflow (do not edit unless extending)
-├── references/
-│   ├── README.md                     # this file
-│   ├── config.sample.json            # COMMIT — routing template
-│   ├── config.json                   # GITIGNORED — your actual routing config
-│   ├── credentials.sample.json       # COMMIT — secrets template
-│   └── importConfiguration.json      # COMMIT — Xray CSV column mapping
-├── output/
-│   └── *.csv                         # GITIGNORED — generated test case CSVs
+xray-test-suite-skills/                          # plugin root
+├── .claude-plugin/
+│   ├── plugin.json                              # plugin manifest
+│   └── marketplace.json                         # marketplace manifest
+├── skills/
+│   └── xray-test-suite/
+│       ├── SKILL.md                             # workflow Claude follows
+│       ├── references/
+│       │   ├── README.md                        # this file
+│       │   ├── config.sample.json               # COMMIT — routing template
+│       │   ├── config.json                      # GITIGNORED — your actual routing config
+│       │   ├── credentials.sample.json          # COMMIT — secrets template
+│       │   └── importConfiguration.json         # COMMIT — Xray CSV column mapping
+│       └── output/
+│           └── *.csv                            # GITIGNORED — generated test case CSVs
+├── commands/
+│   └── xray-tests.md                            # /xray-tests slash command
 └── examples/
-    └── sample-requirements.md        # COMMIT — small example to test end-to-end
+    └── sample-requirements.md                   # COMMIT — small example to test end-to-end
 ```
 
-Real secrets live at `~/.claude/.xray-credentials.json` (outside this folder, never committed).
+Real secrets live at `~/.claude/.xray-credentials.json` (outside the plugin folder, never committed).
