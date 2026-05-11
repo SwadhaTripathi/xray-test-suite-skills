@@ -20,6 +20,37 @@ You stay in control — nothing is written to Jira until you explicitly approve.
 
 ---
 
+## How to invoke
+
+**The only entry point is the `/xray-tests` slash command.** Type it directly in Claude Code:
+
+```text
+/xray-tests <jira-key | confluence-url | file-path>
+/xray-tests --dry-run                     # validate config without creating anything
+/xray-tests                                # prompts you for an input source
+```
+
+### Why slash-command-only?
+
+The bundled skill (`skills/xray-test-suite/SKILL.md`) carries `disable-model-invocation: true` in its frontmatter. This tells the Claude Code harness: **Claude will not autonomously trigger this workflow** even when the conversation sounds vaguely related to test generation. You must explicitly type `/xray-tests`.
+
+This is deliberate. The workflow creates Jira issues, which are hard to reverse in bulk. Keeping invocation user-initiated is an extra safety rail on top of the skill's "wait for explicit `APPROVE` before creating" guard — defense in depth for a destructive-by-default operation.
+
+### How the command works internally
+
+The `/xray-tests` command (`commands/xray-tests.md`) does NOT call the Skill tool — that path is blocked by the model-invocation flag above. Instead, when you invoke it:
+
+1. The command body loads in Claude's context.
+2. Claude uses the **Read** tool to fetch `skills/xray-test-suite/SKILL.md` directly as a document (no Skill-tool hop).
+3. Claude executes the 9-step workflow defined in `SKILL.md`, treating any argument you passed as the input source.
+4. Interactive prompts (matrix approval, output mode, Playwright yes/no) stream directly in chat.
+
+This design keeps a single source of truth (`SKILL.md`) while side-stepping the Skill-tool gate that the model-invocation flag enforces.
+
+> **If you're contributing to this plugin:** edit the workflow in `skills/xray-test-suite/SKILL.md`. The command file (`commands/xray-tests.md`) is intentionally thin — it just points at `SKILL.md` and reminds Claude of the critical safety rules. Both files live in the plugin repo and update together via `/plugin update xray-test-suite`.
+
+---
+
 ## Prerequisites
 
 | Requirement | Why |
@@ -76,7 +107,83 @@ For the rest of this guide we'll refer to that location as `<PLUGIN_DIR>`. You'l
 
 ---
 
+## Quickest path — bundled setup script
+
+The plugin ships with cross-platform setup scripts that automate Steps 3 and 4 in one command. Use these unless you need fine-grained control over individual fields (e.g., custom field IDs that differ from defaults).
+
+**Bash (macOS / Linux / Git Bash on Windows):**
+
+```bash
+bash <PLUGIN_DIR>/scripts/xray-setup.sh
+```
+
+**PowerShell (Windows native):**
+
+```powershell
+pwsh <PLUGIN_DIR>/scripts/xray-setup.ps1
+```
+
+Run either from your own terminal — the script will:
+
+1. Copy `config.sample.json` → `config.json` in the plugin folder
+2. Copy `credentials.sample.json` → `~/.claude/.xray-credentials.json`
+3. Prompt interactively for each value (API token and Xray secrets are read as hidden input via `read -s` / `Read-Host -AsSecureString`)
+4. Write your values into the JSON files
+5. Validate that no `<...>` placeholders remain, then exit `0`
+
+### Non-interactive mode (CI, automation, scripted setup)
+
+Pass values as flags — useful when running in pipelines or from another tool:
+
+```bash
+bash <PLUGIN_DIR>/scripts/xray-setup.sh \
+  --cloud-id "yoursite.atlassian.net" \
+  --username "you@company.com" \
+  --project-key "FIFAGEN" \
+  --xray-import-url "https://yoursite.atlassian.net/plugins/servlet/ac/..." \
+  --api-token "ATATT..." \
+  --xray-client-id "xxxx" \
+  --xray-client-secret "yyyy"
+```
+
+```powershell
+pwsh <PLUGIN_DIR>/scripts/xray-setup.ps1 `
+  -CloudId "yoursite.atlassian.net" `
+  -Username "you@company.com" `
+  -ProjectKey "FIFAGEN" `
+  -XrayImportUrl "https://..." `
+  -ApiToken "ATATT..." `
+  -XrayClientId "xxxx" `
+  -XrayClientSecret "yyyy"
+```
+
+### Auto-invocation during `/xray-tests`
+
+If you run `/xray-tests` before configuring, the command detects the missing files and invokes the appropriate script automatically. Claude will then prompt you in chat for any missing values.
+
+> ⚠️ **Privacy caveat for the auto-invoke path:** values you type in chat — *especially* the Atlassian API token and the Xray Cloud client secret — become part of the conversation transcript. For maximum isolation, **run the script directly in your own terminal** (one of the commands above) before invoking `/xray-tests`. The script's interactive prompts use hidden input for secrets and never echo them.
+
+### Exit codes (for scripting)
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Fully configured — no placeholders remain |
+| `2` | Files staged but values still need to be filled in (re-run with flags or interactively) |
+| `1` | Hard error — sample files missing (plugin not installed correctly) or Python not in PATH (bash script only) |
+
+### What the script does NOT touch
+
+- `customFields.*` IDs in `config.json` — keep their sample defaults (`customfield_10014` etc.); override manually below if your tenant uses different IDs
+- `parallelExecution.*` settings — defaults are fine for most users
+- The `importConfiguration.json` file — that's the contract with the Xray importer, not user-configurable
+
+**If you used the script and it exited `0`**, skip to [Step 5 — Verify your setup](#step-5--verify-your-setup-dry-run). The two sections below (Steps 3 and 4) document the manual path as a fallback.
+
+---
+
 ## Step 3 — Create your routing config
+
+> Use this section if you skipped the bundled script above, or to tweak fields the script doesn't expose.
 
 This file holds tenant-level routing info — your cloud ID, project key, custom field IDs, and Xray import URL. **No secrets here.**
 

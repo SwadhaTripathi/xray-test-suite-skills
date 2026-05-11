@@ -187,6 +187,10 @@ The CSV is consumed by Xray's Test Case Importer. The column schema is **driven 
 | 4 | `__xray_step_data` | `Step Data` | Every step row |
 | 5 | `__xray_step_action` | `Step Action` | Every step row |
 | 6 | `__xray_step_result` | `Step Result` | Every step row |
+| 7 | `__xray_step_number` | `Step Number` | Every step row (1-indexed within test) |
+| 8 | `customfield_10014` | `Epic Link` | First row of each test (Jira Epic key, e.g. `FIFAGEN-10400`) |
+
+> ⚠️ **Tenant-portability note**: `customfield_10014` is the Epic Link field ID on the default reference tenant. If your Jira tenant uses a different ID (check `config.json` → `customFields.epicLink`), update column.index 8's `jira.field.id` in `importConfiguration.json` accordingly.
 
 **Format rules** (from `importConfiguration.json`):
 - Delimiter `,`  •  Encoding UTF-8  •  Quote `"`  •  Escape `"` as `""`
@@ -200,7 +204,7 @@ A test with N steps emits N rows sharing the same Test ID. The first row carries
 Example (1 test, 2 steps):
 
 ```csv
-Test ID,Summary,Description,Test Type,Step Data,Step Action,Step Result
+Test ID,Summary,Description,Test Type,Step Data,Step Action,Step Result,Step Number,Epic Link
 TC-001,"Basic Unload from Chuck","Objective: Verify wafer unload...
 
 Preconditions:
@@ -209,8 +213,8 @@ Preconditions:
 
 Requirements: R1;R3
 Priority: High
-Tags: Positive",Manual,"slot=1; wafer_id=W001","Click Unload button","Wafer moves to carrier slot 1"
-TC-001,,,,"slot=1","Verify carrier light is green","Light is green and no alarms"
+Tags: Positive",Manual,"slot=1; wafer_id=W001","Click Unload button","Wafer moves to carrier slot 1",1,FIFAGEN-10400
+TC-001,,,,"slot=1","Verify carrier light is green","Light is green and no alarms",2,
 ```
 
 **Field construction:**
@@ -221,9 +225,11 @@ TC-001,,,,"slot=1","Verify carrier light is green","Light is green and no alarms
 | `Summary` | `test_case.summary` |
 | `Description` | `Objective: <objective>\n\nPreconditions:\n- <p>\n\nRequirements: <ids joined ";">\nPriority: <p>\nTags: <tags joined ";">` |
 | `Test Type` | `config.defaults.testType` |
-| `Step Data` | `step.data` (empty string if null) |
+| `Step Data` | `step.data` (use literal "no data" if step has no meaningful data; never use Unicode em-dash — cp1252 mojibake) |
 | `Step Action` | `step.action` |
 | `Step Result` | `step.expected_result` |
+| `Step Number` | `step_index + 1` (1-indexed within test; Xray uses this for ordering and step-level display in Jira test issues) |
+| `Epic Link` | `EPIC_KEY` on first row of each test, empty on subsequent step rows. Maps to `customfield_10014` so Xray auto-links the created Test under the Epic — no manual Jira UI click needed post-import. |
 
 **Write to:** `${CLAUDE_SKILL_DIR}/output/TestCases_<EPIC_KEY>_<YYYYMMDD-HHMMSS>.csv` (or per `config.output.filenamePattern`).
 

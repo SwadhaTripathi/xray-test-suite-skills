@@ -1,7 +1,7 @@
 {
   "name": "xray-test-suite",
   "description": "Full-cycle Xray test case workflow — generate test cases from requirements (Jira issue, Confluence page, local file, or pasted text), produce import-ready CSV and/or create Jira issues directly via Atlassian API, and optionally upload the CSV via Playwright browser automation. Includes the /xray-tests slash command.",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "author": {
     "name": "Swadha Tripathi"
   },
