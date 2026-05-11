@@ -1,0 +1,50 @@
+{
+  "_comment": "Routing & non-secret config for the xray-test-suite skill. Copy this file to config.json and fill in your tenant/project values. Real secrets belong in ~/.claude/.xray-credentials.json (see credentials.sample.json).",
+
+  "atlassian": {
+    "cloudId": "<your-atlassian-cloud-id-or-host, e.g. abc123-def456 or your-site.atlassian.net>",
+    "username": "<your.email@company.com>"
+  },
+
+  "project": {
+    "key": "<JIRA_PROJECT_KEY, e.g. FIFAGEN>",
+    "name": "<Jira Project Display Name>"
+  },
+
+  "xrayImport": {
+    "url": "<full Xray import-tests-page URL with project.key & project.id query params>",
+    "_url_example": "https://your-site.atlassian.net/plugins/servlet/ac/com.xpandit.plugins.xray/import-tests-page?project.key=PROJ&project.id=12345"
+  },
+
+  "customFields": {
+    "_comment": "Field IDs vary per Jira tenant. Find them at: /rest/api/3/field on your Jira instance.",
+    "epicLink": "customfield_10014",
+    "manualTestSteps": "customfield_11985",
+    "rovoManualSteps": "customfield_12591",
+    "testScope": "customfield_11201",
+    "automationPotential": "customfield_11202",
+    "regressionTest": "customfield_11203",
+    "testLevel": "customfield_11204"
+  },
+
+  "defaults": {
+    "testType": "Manual",
+    "priority": "Medium"
+  },
+
+  "parallelExecution": {
+    "enabled": true,
+    "batchSize": 10,
+    "maxConcurrent": 10,
+    "retryFailed": true,
+    "includeXraySteps": true,
+    "_note": "batchSize: 10=aggressive (default), 5=conservative, 3=limited resources"
+  },
+
+  "credentialsPath": "~/.claude/.xray-credentials.json",
+
+  "output": {
+    "csvDirectory": "${CLAUDE_SKILL_DIR}/output",
+    "filenamePattern": "TestCases_{EPIC_KEY}_{TIMESTAMP}.csv"
+  }
+}
