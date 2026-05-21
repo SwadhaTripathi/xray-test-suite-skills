@@ -23,9 +23,11 @@ Three files. Read them at the start of every run.
 
 | File | Purpose | Committed? |
 |------|---------|-----------|
-| `${CLAUDE_SKILL_DIR}/references/config.json` | Routing (cloudId, project key, custom field IDs, Xray import URL) | NO — gitignored |
+| `${CLAUDE_SKILL_DIR}/references/config.json` | Routing (cloudId, project key, custom field IDs, Xray import URL, **step template Jira key, reviewer settings**) | NO — gitignored |
 | `~/.claude/.xray-credentials.json` | Real secrets (API token, Xray client ID/secret) | NO — lives outside skill |
 | `${CLAUDE_SKILL_DIR}/references/importConfiguration.json` | CSV column → Jira field mapping (authoritative for CSV schema) | YES |
+
+**New in this version**: `config.templates.testStepTemplateKey` (Jira key for canonical Xray test) and `config.reviewer.*` (`enabled`, `maxIterations`, `severityThreshold`) drive the **Step 4.5 automated reviewer loop**. Defaults if unset: `enabled = true`, `maxIterations = 3`, `severityThreshold = "High"`. If `testStepTemplateKey` is unset/placeholder, the reviewer skips only the Template review category.
 
 Templates: `config.sample.json` and `credentials.sample.json` are committed. See `references/README.md` for first-time setup.
 
@@ -33,7 +35,8 @@ Templates: `config.sample.json` and `credentials.sample.json` are committed. See
 
 ## Critical Rules
 
-- **NEVER create Jira issues until the user explicitly writes "APPROVE" / "APPROVE ALL" / "APPROVE: <TC-IDs>"**
+- **NEVER create Jira issues until the user explicitly writes "APPROVE" / "APPROVE ALL" / "APPROVE: <TC-IDs>"** (after the Step 4.5 reviewer loop converges OR the user accepts gaps from the escalation menu)
+- **WHEN `config.reviewer.enabled = true`, NEVER skip Step 4.5 — automated review is the primary gate**; manual APPROVE is only the fallback when reviewer is disabled OR when the user opts out via the escalation menu after iteration `maxIterations`
 - **NEVER leak credentials, tokens, or secrets in outputs**
 - **ALWAYS present the draft test matrix with coverage before any creation**
 - **ALWAYS ask the user to pick output mode (CSV / API / Both) — do not assume**
@@ -142,7 +145,79 @@ Route based on detected input type:
 }
 ```
 
-Present the test matrix to the user and wait for explicit approval before proceeding.
+If `config.reviewer.enabled = true` (default), pass the draft matrix to **Step 4.5 — Review & Refine Loop** for automated coverage / mapping / template / state-machine / merge / diagram validation. Otherwise (or after the loop escalates and the user opts out), present the matrix to the user and wait for explicit `APPROVE` / `APPROVE ALL` / `APPROVE: <TC-IDs>` before proceeding to Step 5.
+
+---
+
+### Step 4.5 — Review & Refine Loop
+
+**Runs when:** `config.reviewer.enabled = true` (default `true` if the field is missing). When `false`, skip directly to Step 5 after manual `APPROVE`.
+
+**Purpose:** An automated test-case-reviewer subagent — running in a fresh context with no prior commitment to the draft — validates the matrix against the source SRS / images / state diagrams / step template, and loops with the generator (this skill) until either the reviewer is satisfied or the user accepts the remaining gaps.
+
+**Algorithm:**
+
+```
+iter = 1
+prev_feedback = null
+loop:
+    result = dispatch_reviewer_agent(
+        source_type, source_content, image_paths,
+        template_issue_key = config.templates.testStepTemplateKey,
+        draft_matrix = current_matrix,
+        iteration = iter,
+        previous_feedback = prev_feedback
+    )
+    print "Reviewer iter <iter>: verdict=<result.verdict>, <#crit>/<#high>/<#med>/<#low> issues, <#gaps> gaps, <#merges> merges"
+    if result.verdict == "PASS":
+        break  # → proceed to Step 5
+    if iter >= (config.reviewer.maxIterations ?? 3):
+        escalate_to_user(result)  # see "Escalation menu" below — user decides
+        break
+    current_matrix = refine_matrix(current_matrix, result)  # see "Refinement strategy" below
+    prev_feedback = result.issues
+    iter += 1
+```
+
+**Reviewer dispatch:** Spawn one `general-purpose` agent (same agent-type as Step 8.2's parallel creators), foreground (Step 5 blocks on its result). Pass the inputs documented in the **Reviewer Agent Contract** section below. The agent's response is parsed as JSON conforming to that contract — if the response is not parseable JSON, retry the dispatch once with a stricter "return JSON only — no prose" instruction; on second failure, escalate to the user as if `iter == maxIterations`.
+
+**Template gracefully optional:** If `config.templates.testStepTemplateKey` is unset, empty, or still a `<...>` placeholder, dispatch the reviewer with `template_issue_key = null` and instruct it to skip the **Template** review category (enforce only the other five: Coverage, Mapping, StateMachine, MergeOpportunity, DiagramCoverage). Note this in the iteration summary so the user knows step-shape was not checked.
+
+**Refinement strategy** (`refine_matrix` is implemented inline by this skill — NOT a subagent — since the matrix lives in the current conversation):
+
+| Reviewer issue category | Skill response (only if severity ≥ `config.reviewer.severityThreshold`) |
+|------------------------|--------------------------------------------------------------------------|
+| `Coverage` | Generate a new TC covering each missing requirement ID from `coverage_gaps[]` |
+| `StateMachine` | Generate a new TC for each missing transition |
+| `Mapping` | Fix the named TC's `requirement_ids` array to match what its steps actually exercise |
+| `MergeOpportunity` | Merge tests per `merge_suggestions[]`: keep `merge_into`'s TC ID; absorb steps + `requirement_ids` from the named TCs in `absorb[]`; remove the absorbed TCs |
+| `Template` | Rewrite the offending step's `action` / `data` / `expected_result` per the reviewer's `suggested_fix` |
+| `DiagramCoverage` | Extend or add a TC referencing the missed visual element |
+| Issues below `severityThreshold` | Note in the iteration summary; do NOT trigger refinement |
+
+After each refinement, re-number TC IDs to remain dense (TC-001, TC-002…) and preserve `requirement_ids` traceability.
+
+**Escalation menu (at `iter ≥ maxIterations` OR if reviewer JSON is unparseable twice):**
+
+```
+Reviewer did not converge after <N> iterations.
+
+Remaining issues (severity ≥ <threshold>):
+  [grouped by category, each with TC ID + description]
+
+Coverage gaps still open: <R-IDs>
+Merge suggestions not applied: <list>
+
+Options:
+  1. Accept all gaps  — proceed to Step 5 with the current matrix
+  2. Accept specific  — e.g. "accept: TC-003, R7"  (only those issues skipped; others still loop)
+  3. Force iterate    — re-run reviewer + refinement once more
+  4. Abort            — exit workflow without creating any tests
+
+Reply: 1, 2 (with list), 3, or 4
+```
+
+Options 1 and 2 proceed to Step 5. Option 3 sets `iter = iter` (no increment) and re-enters the loop body once. Option 4 cleanly exits with no Jira changes.
 
 ---
 
@@ -409,6 +484,74 @@ Atlassian Document Format examples for `description` and custom-field bodies.
 
 ---
 
+## Reviewer Agent Contract
+
+Detailed I/O specification for the Step 4.5 reviewer subagent.
+
+### Inputs (assembled by this skill before dispatch)
+
+| Section | Content | Notes |
+|---------|---------|-------|
+| Role | "You are a test-case reviewer running in a fresh context with no prior commitment to the draft. Re-extract requirements independently from the source materials below — do NOT trust the draft matrix's interpretation." | Pinning fresh-context discipline is critical |
+| `source_type` | `jira` / `confluence` / `file` / `text` | |
+| `source_content` | Inline verbatim if < 8 KB; otherwise pass the path/key and instruct the agent to re-fetch via Read / `mcp__atlassian__getJiraIssue` / `mcp__atlassian__getConfluencePage` | Token budget |
+| `image_paths` | Absolute paths to `.png` / `.jpg` / `.drawio` referenced in source; agent uses Read with vision | Raw — no preprocessing |
+| `template_issue_key` | `config.templates.testStepTemplateKey` or `null` | If null, agent skips the Template category |
+| `draft_matrix` | Full internal test-case schema array as JSON | |
+| `iteration` | `1`, `2`, or `3` | |
+| `previous_feedback` | (iter > 1) prior `issues[]` array | Agent verifies prior issues were addressed |
+| Six review jobs | Bulleted checklist (see below) | |
+| Severity rubric | Critical / High / Medium / Low with examples (see below) | |
+| Output instruction | "Return JSON only — no prose preamble or postamble. Conform to the schema below." + the schema | |
+
+### Six Review Jobs
+
+The reviewer must check each:
+
+1. **Coverage** — Re-extract requirement IDs (R1, R2…) from source. Every R-ID must map to ≥1 TC's `requirement_ids` array. Report missing R-IDs in `coverage_gaps[]` and emit a `Coverage` issue.
+2. **Mapping** — For each TC, the steps must actually exercise the requirements listed in `requirement_ids`. Flag: requirements claimed but not tested, or steps testing un-listed requirements.
+3. **StateMachine** — If source contains a state machine (text or diagram), every transition must have ≥1 covering TC. Report missing transitions as `category: "StateMachine"` issues.
+4. **MergeOpportunity** — Two TCs with ≥80% step overlap, or where one's data set is a subset of the other's, are merge candidates. Emit `merge_suggestions[]` entries.
+5. **Template** (skip if `template_issue_key == null`) — Fetch the template Xray test via `mcp__atlassian__getJiraIssue` + Xray Cloud `GET /api/v2/test/<KEY>/steps`. Derive shape rules (verb-first actions; measurable expected results — no "works correctly"; data field semantics). Flag steps that violate them.
+6. **DiagramCoverage** — For each visual element / state / transition / box in attached diagrams, verify some TC references it. Flag uncited elements.
+
+### Severity Rubric
+
+| Severity | Examples |
+|----------|----------|
+| Critical | Missing requirement coverage; safety/compliance miss; broken state transition with no covering test |
+| High | Vague expected results ("works correctly", "is correct"); mapping error; missing edge case explicitly listed in source |
+| Medium | Merge opportunity; minor template-shape deviation; redundant test |
+| Low | Stylistic phrasing; non-essential ordering |
+
+### Output JSON Schema
+
+```json
+{
+  "verdict": "PASS" | "REVISE",
+  "iteration": 1,
+  "summary": "<one-line human summary>",
+  "issues": [
+    {
+      "category": "Coverage" | "Mapping" | "StateMachine" | "MergeOpportunity" | "Template" | "DiagramCoverage",
+      "severity": "Critical" | "High" | "Medium" | "Low",
+      "test_id": "TC-001" | null,
+      "requirement_ids": ["R1", "R5"],
+      "description": "<what's wrong>",
+      "suggested_fix": "<concrete edit>"
+    }
+  ],
+  "coverage_gaps": ["R7", "R9"],
+  "merge_suggestions": [
+    {"merge_into": "TC-002", "absorb": ["TC-005"], "reason": "<why>"}
+  ]
+}
+```
+
+**Verdict logic for the reviewer:** Return `PASS` only if NO issue has severity ≥ `config.reviewer.severityThreshold` (default `High`) AND `coverage_gaps[]` is empty. Otherwise `REVISE`.
+
+---
+
 ## Custom Fields Reference
 
 Default IDs (override in `config.json` per tenant):
@@ -502,4 +645,35 @@ Get API credentials: Jira → Settings → Apps → Xray → API Keys → Create
 → skill reads config + credentials, redacts secrets, prints resolved values
 → verifies importConfiguration.json is valid
 → exits without any creation
+```
+
+### Example 5 — Reviewer loop converges (Step 4.5)
+```
+/xray-tests FIFAGEN-2872
+→ matrix drafted at Step 4 (8 tests)
+→ Step 4.5 iter 1: reviewer fetches template (FIFAGEN-99999), finds 2 coverage gaps
+  (R5, R7), 1 mapping issue on TC-003, 1 merge opportunity (TC-006↔TC-008)
+  verdict=REVISE
+→ generator refines: adds TC-009 for R5+R7, fixes TC-003 requirement_ids,
+  merges TC-008 into TC-006
+→ Step 4.5 iter 2: reviewer PASS — no issues at severity ≥ High, no coverage gaps
+→ Step 5: user picks mode "1" (CSV only)
+→ CSV written; 8 tests (1 added, 1 merged in)
+```
+
+### Example 6 — Reviewer escalates after 3 iterations
+```
+/xray-tests ./reqs.md
+→ matrix drafted (5 tests)
+→ Step 4.5 iter 1: REVISE — StateMachine issue: "error→idle transition missing"
+→ generator adds TC-006 for error→idle
+→ Step 4.5 iter 2: REVISE — same StateMachine issue persists; reviewer says
+  TC-006's expected_result doesn't actually verify the transition fires
+→ generator rewrites TC-006 step 3 expected_result
+→ Step 4.5 iter 3: REVISE — same issue; reviewer claims source diagram shows
+  a SECOND error→idle transition under a different precondition
+→ Escalation menu shown. User replies "accept: state-machine-transition-2"
+  (acknowledges the gap is intentional — second transition is documented
+   elsewhere as out-of-scope for this epic)
+→ Step 5: user picks mode "3" (Both)
 ```

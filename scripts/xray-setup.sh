@@ -11,7 +11,8 @@
 #   bash scripts/xray-setup.sh --force                                    # overwrite existing files
 #
 # All env-var inputs use the XRAY_ prefix (XRAY_CLOUD_ID, XRAY_USERNAME, XRAY_PROJECT_KEY,
-# XRAY_PROJECT_NAME, XRAY_IMPORT_URL, XRAY_API_TOKEN, XRAY_CLIENT_ID, XRAY_CLIENT_SECRET).
+# XRAY_PROJECT_NAME, XRAY_IMPORT_URL, XRAY_API_TOKEN, XRAY_CLIENT_ID, XRAY_CLIENT_SECRET,
+# XRAY_TEST_STEP_TEMPLATE_KEY, XRAY_REVIEWER_ENABLED).
 # This avoids collisions with system env vars like USERNAME (Windows) or PROJECT_KEY (some CIs).
 #
 # EXIT CODES
@@ -40,6 +41,8 @@ IMPORT_URL="${XRAY_IMPORT_URL:-}"
 API_TOKEN="${XRAY_API_TOKEN:-}"
 XRAY_CLIENT_ID="${XRAY_CLIENT_ID:-}"
 XRAY_CLIENT_SECRET="${XRAY_CLIENT_SECRET:-}"
+TEST_STEP_TEMPLATE_KEY="${XRAY_TEST_STEP_TEMPLATE_KEY:-}"
+REVIEWER_ENABLED="${XRAY_REVIEWER_ENABLED:-}"
 FORCE=0
 
 while [ $# -gt 0 ]; do
@@ -52,6 +55,8 @@ while [ $# -gt 0 ]; do
     --api-token)          API_TOKEN="$2"; shift 2 ;;
     --xray-client-id)     XRAY_CLIENT_ID="$2"; shift 2 ;;
     --xray-client-secret) XRAY_CLIENT_SECRET="$2"; shift 2 ;;
+    --test-step-template-key) TEST_STEP_TEMPLATE_KEY="$2"; shift 2 ;;
+    --reviewer-enabled)   REVIEWER_ENABLED="$2"; shift 2 ;;
     --force)              FORCE=1; shift ;;
     -h|--help)
       sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
@@ -98,6 +103,7 @@ prompt USERNAME     "Atlassian username (work email)"
 prompt PROJECT_KEY  "Jira project key (e.g. FIFAGEN)"
 prompt PROJECT_NAME "Jira project display name" "${PROJECT_KEY:-}"
 prompt IMPORT_URL   "Xray Test Case Importer URL"
+prompt TEST_STEP_TEMPLATE_KEY "Test-step template Jira key (Xray test, optional — used by Step 4.5 reviewer; press enter to skip)"
 prompt_secret API_TOKEN "Atlassian API token"
 prompt XRAY_CLIENT_ID "Xray Cloud Client ID (optional, press enter to skip)"
 [ -n "${XRAY_CLIENT_ID}" ] && prompt_secret XRAY_CLIENT_SECRET "Xray Cloud Client Secret"
@@ -106,10 +112,13 @@ PYTHON_CMD="python3"
 command -v python3 >/dev/null 2>&1 || PYTHON_CMD="python"
 command -v "$PYTHON_CMD" >/dev/null 2>&1 || { echo "ERROR: python/python3 not found in PATH" >&2; exit 1; }
 
-if [ -n "${CLOUD_ID}${USERNAME}${PROJECT_KEY}${PROJECT_NAME}${IMPORT_URL}" ]; then
+if [ -n "${CLOUD_ID}${USERNAME}${PROJECT_KEY}${PROJECT_NAME}${IMPORT_URL}${TEST_STEP_TEMPLATE_KEY}${REVIEWER_ENABLED}" ]; then
   CLOUD_ID="$CLOUD_ID" USERNAME="$USERNAME" \
   PROJECT_KEY="$PROJECT_KEY" PROJECT_NAME="$PROJECT_NAME" \
-  IMPORT_URL="$IMPORT_URL" CONFIG_FILE="$CONFIG" \
+  IMPORT_URL="$IMPORT_URL" \
+  TEST_STEP_TEMPLATE_KEY="$TEST_STEP_TEMPLATE_KEY" \
+  REVIEWER_ENABLED="$REVIEWER_ENABLED" \
+  CONFIG_FILE="$CONFIG" \
   "$PYTHON_CMD" - <<'PY'
 import json, os
 p = os.environ["CONFIG_FILE"]
@@ -122,11 +131,17 @@ def s(d, k, v):
             d[kk] = {}
         d = d[kk]
     d[keys[-1]] = v
-s(c, "atlassian.cloudId",  os.environ.get("CLOUD_ID"))
-s(c, "atlassian.username", os.environ.get("USERNAME"))
-s(c, "project.key",        os.environ.get("PROJECT_KEY"))
-s(c, "project.name",       os.environ.get("PROJECT_NAME"))
-s(c, "xrayImport.url",     os.environ.get("IMPORT_URL"))
+s(c, "atlassian.cloudId",             os.environ.get("CLOUD_ID"))
+s(c, "atlassian.username",            os.environ.get("USERNAME"))
+s(c, "project.key",                   os.environ.get("PROJECT_KEY"))
+s(c, "project.name",                  os.environ.get("PROJECT_NAME"))
+s(c, "xrayImport.url",                os.environ.get("IMPORT_URL"))
+s(c, "templates.testStepTemplateKey", os.environ.get("TEST_STEP_TEMPLATE_KEY"))
+re = os.environ.get("REVIEWER_ENABLED", "").strip().lower()
+if re in ("true", "1", "yes", "on"):
+    s(c, "reviewer.enabled", True)
+elif re in ("false", "0", "no", "off"):
+    s(c, "reviewer.enabled", False)
 with open(p, "w") as f:
     json.dump(c, f, indent=2)
     f.write("\n")
@@ -174,7 +189,8 @@ if [ "$PLACEHOLDERS" -eq 1 ]; then
   echo
   echo "Re-run with the missing values:"
   echo "  bash $0 --cloud-id <id> --username <email> --project-key <KEY> \\"
-  echo "    --xray-import-url <url> --api-token <token> [--xray-client-id <id> --xray-client-secret <secret>]"
+  echo "    --xray-import-url <url> --api-token <token> [--xray-client-id <id> --xray-client-secret <secret>] \\"
+  echo "    [--test-step-template-key <JIRA-KEY>] [--reviewer-enabled true|false]"
   exit 2
 fi
 echo "OK — config and credentials populated, no placeholders remain."

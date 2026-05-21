@@ -24,6 +24,8 @@ param(
     [string]$ApiToken,
     [string]$XrayClientId,
     [string]$XrayClientSecret,
+    [string]$TestStepTemplateKey,
+    [string]$ReviewerEnabled,
     [switch]$Force
 )
 
@@ -77,13 +79,14 @@ function Prompt-Secret {
     return [System.Net.NetworkCredential]::new('', $sec).Password
 }
 
-$CloudId       = Prompt-Plain  $CloudId       'Atlassian cloudId (hostname or UUID)'
-$Username      = Prompt-Plain  $Username      'Atlassian username (work email)'
-$ProjectKey    = Prompt-Plain  $ProjectKey    'Jira project key (e.g. FIFAGEN)'
-$ProjectName   = Prompt-Plain  $ProjectName   'Jira project display name' $ProjectKey
-$XrayImportUrl = Prompt-Plain  $XrayImportUrl 'Xray Test Case Importer URL'
-$ApiToken      = Prompt-Secret $ApiToken      'Atlassian API token'
-$XrayClientId  = Prompt-Plain  $XrayClientId  'Xray Cloud Client ID (optional, press enter to skip)'
+$CloudId             = Prompt-Plain  $CloudId             'Atlassian cloudId (hostname or UUID)'
+$Username            = Prompt-Plain  $Username            'Atlassian username (work email)'
+$ProjectKey          = Prompt-Plain  $ProjectKey          'Jira project key (e.g. FIFAGEN)'
+$ProjectName         = Prompt-Plain  $ProjectName         'Jira project display name' $ProjectKey
+$XrayImportUrl       = Prompt-Plain  $XrayImportUrl       'Xray Test Case Importer URL'
+$TestStepTemplateKey = Prompt-Plain  $TestStepTemplateKey 'Test-step template Jira key (Xray test issue, optional — used by Step 4.5 reviewer; press enter to skip)'
+$ApiToken            = Prompt-Secret $ApiToken            'Atlassian API token'
+$XrayClientId        = Prompt-Plain  $XrayClientId        'Xray Cloud Client ID (optional, press enter to skip)'
 if ($XrayClientId) {
     $XrayClientSecret = Prompt-Secret $XrayClientSecret 'Xray Cloud Client Secret'
 }
@@ -105,13 +108,18 @@ function Set-JsonField {
     else { $cur | Add-Member -MemberType NoteProperty -Name $leaf -Value $Value -Force }
 }
 
-if ($CloudId -or $Username -or $ProjectKey -or $ProjectName -or $XrayImportUrl) {
+if ($CloudId -or $Username -or $ProjectKey -or $ProjectName -or $XrayImportUrl -or $TestStepTemplateKey -or $ReviewerEnabled) {
     $cfg = Get-Content $Config -Raw | ConvertFrom-Json
-    Set-JsonField $cfg 'atlassian.cloudId'  $CloudId
-    Set-JsonField $cfg 'atlassian.username' $Username
-    Set-JsonField $cfg 'project.key'        $ProjectKey
-    Set-JsonField $cfg 'project.name'       $ProjectName
-    Set-JsonField $cfg 'xrayImport.url'     $XrayImportUrl
+    Set-JsonField $cfg 'atlassian.cloudId'             $CloudId
+    Set-JsonField $cfg 'atlassian.username'            $Username
+    Set-JsonField $cfg 'project.key'                   $ProjectKey
+    Set-JsonField $cfg 'project.name'                  $ProjectName
+    Set-JsonField $cfg 'xrayImport.url'                $XrayImportUrl
+    Set-JsonField $cfg 'templates.testStepTemplateKey' $TestStepTemplateKey
+    if ($ReviewerEnabled) {
+        $reviewerBool = if ($ReviewerEnabled -match '^(true|1|yes|on)$') { $true } else { $false }
+        Set-JsonField $cfg 'reviewer.enabled' $reviewerBool
+    }
     ($cfg | ConvertTo-Json -Depth 10) | Set-Content $Config -Encoding UTF8
     Write-Host "Updated: $Config"
 }
@@ -143,6 +151,7 @@ if ($hasPlaceholders) {
     Write-Host 'Re-run with the missing values:'
     Write-Host "  pwsh $($MyInvocation.MyCommand.Path) -CloudId <id> -Username <email> -ProjectKey <KEY> ``"
     Write-Host '    -XrayImportUrl <url> -ApiToken <token> [-XrayClientId <id> -XrayClientSecret <secret>]'
+    Write-Host '    [-TestStepTemplateKey <JIRA-KEY>] [-ReviewerEnabled true|false]'
     exit 2
 }
 Write-Host 'OK — config and credentials populated, no placeholders remain.'

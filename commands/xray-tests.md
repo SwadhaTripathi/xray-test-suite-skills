@@ -32,7 +32,7 @@ This command drives the full workflow **inline** — Claude does NOT call the Sk
 
    Handle the script's exit code:
    - `0` — fully configured. Continue to Step 1.
-   - `2` — files staged but placeholders remain. Conduct an interactive chat with the user to gather each missing value (cloudId, username, projectKey, projectName, xrayImportUrl, apiToken, optional xrayClientId/xrayClientSecret). For the API token and Xray Cloud secret, **warn the user that these will pass through this conversation's transcript** and offer them the option to run the script themselves in their own terminal instead. Then re-invoke the script with the values via `-CloudId`/`--cloud-id`-style flags (PowerShell uses `-CamelCase`, bash uses `--kebab-case`). On `0`, continue to Step 1.
+   - `2` — files staged but placeholders remain. Conduct an interactive chat with the user to gather each missing value (cloudId, username, projectKey, projectName, xrayImportUrl, apiToken, optional xrayClientId/xrayClientSecret, optional testStepTemplateKey for the Step 4.5 reviewer). For the API token and Xray Cloud secret, **warn the user that these will pass through this conversation's transcript** and offer them the option to run the script themselves in their own terminal instead. Then re-invoke the script with the values via `-CloudId`/`--cloud-id`-style flags (PowerShell uses `-CamelCase`, bash uses `--kebab-case`); the reviewer-related flags are `-TestStepTemplateKey`/`--test-step-template-key` and `-ReviewerEnabled`/`--reviewer-enabled`. On `0`, continue to Step 1.
    - `1` — hard error (sample files missing). Abort and tell the user to verify the plugin install via `/plugin info xray-test-suite`.
 
    If `$ARGUMENTS == "--dry-run"`, you can skip Step 0 only when both files already exist — otherwise the dry-run cannot validate anything meaningful, so still run setup first.
@@ -44,7 +44,8 @@ This command drives the full workflow **inline** — Claude does NOT call the Sk
 2. **Follow the 9-step workflow** defined in that document, treating `$ARGUMENTS` as the input source for Step 2 (input detection). If `$ARGUMENTS` is empty, follow the document's instruction to prompt the user with the supported-input table.
 3. **Do NOT invoke the Skill tool.** The skill has `disable-model-invocation: true` set deliberately — autonomous invocation is blocked so the destructive Jira-creation workflow only runs when the user explicitly types `/xray-tests`. This command is the sole entry point.
 4. **Respect every Critical Rule** in `SKILL.md`, especially:
-   - Never create Jira issues without explicit user `APPROVE` / `APPROVE ALL` / `APPROVE: <TC-IDs>`
+   - Never create Jira issues without explicit user `APPROVE` / `APPROVE ALL` / `APPROVE: <TC-IDs>` (after the Step 4.5 reviewer loop converges OR the user accepts gaps)
+   - When `config.reviewer.enabled = true`, NEVER skip Step 4.5 (Review & Refine Loop) — manual matrix approval is only the fallback
    - Always present the draft test matrix before any creation
    - Always ask the user to pick output mode (CSV / API / Both)
    - Never leak credentials in outputs
@@ -53,6 +54,7 @@ The `SKILL.md` document covers:
 - Configuration loading (`skills/xray-test-suite/references/config.json` + `~/.claude/.xray-credentials.json`)
 - Input detection and requirements fetching (Jira / Confluence / files / text)
 - Test case analysis, categorization, optimization, and matrix approval
+- **Step 4.5 — automated test-case-reviewer agent + generator↔reviewer refinement loop** (when `config.reviewer.enabled = true`; hard cap 3 iterations, then user escalation)
 - Output mode prompt (CSV / API / Both)
 - CSV generation, API creation, Playwright upload
 - Mode-aware summary reporting
