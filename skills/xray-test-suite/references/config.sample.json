@@ -32,6 +32,11 @@
     "priority": "Medium"
   },
 
+  "linkTypes": {
+    "testLinkName": "Test",
+    "_note": "Issue link type used by Step 8.1.a to create the 'is tested by' link from Epic to Test. Default 'Test' (inward='is tested by', outward='tests') works on standard Jira Cloud tenants. Override if your tenant uses 'Epic-Test Link' (inward='Epic Tested By') or another custom variant. Discover available types via mcp__atlassian__getIssueLinkTypes."
+  },
+
   "templates": {
     "testStepTemplateKey": "<JIRA_KEY of canonical Xray test, e.g. FIFAGEN-99999>",
     "_comment": "Jira issue key for a canonical Xray test whose steps demonstrate the team's step-shape rules. The Step 4.5 reviewer agent fetches this each run via mcp__atlassian__getJiraIssue + Xray /api/v2/test/<KEY>/steps to derive the canonical step shape (verb-first actions, measurable expected results). Leave the placeholder if reviewer.enabled = false."

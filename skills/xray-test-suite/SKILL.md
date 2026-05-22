@@ -376,11 +376,70 @@ description: <ADF body — see ADF Reference below>
 ```
 
 Then:
-- Link to Epic: `mcp__atlassian__editJiraIssue` with `customfield_10014 = <EPIC_KEY>`
+- Link to Epic (hierarchy): `mcp__atlassian__editJiraIssue` with `customfield_10014 = <EPIC_KEY>`
+- **Create "is tested by" issue link (Step 8.1.a — see below)**
 - Populate `customfield_11985` (manual test steps, ADF format)
 - Add Xray native steps (Step 8.3)
+- **Verify Issue Links table on Epic (Step 8.1.b — see below)**
 
 **Present pilot URL to user and WAIT for explicit approval before proceeding to 8.2.**
+
+##### 8.1.a — Create "is tested by" Issue Link (post-Epic-Link, IDEMPOTENT)
+
+The Epic Link custom field (`customfield_10014`) establishes hierarchy but does NOT populate the Epic's **Issue Links** panel. To make the Epic's Issue Links section display `is tested by <TEST_KEY>`, create a standard Jira issue link AFTER the Epic Link is set.
+
+**⚠ Idempotency requirement (critical):** Jira's `POST /rest/api/3/issueLink` is NOT idempotent — calling it twice for the same (type, inwardIssue, outwardIssue) tuple creates TWO duplicate rows in the Issue Links panel. ALWAYS pre-check existing links before posting. The skip condition: a link with `type.name == linkTypeName` AND `inwardIssue.key == <TEST_KEY>` already exists on the Epic.
+
+**Pre-check (once per Epic, cache the result for that run):**
+```
+existing = mcp__atlassian__getJiraIssue(cloudId, issueIdOrKey=<EPIC_KEY>, fields=["issuelinks"])
+existingTestKeys = set of l.inwardIssue.key for l in existing.fields.issuelinks where l.type.name == config.linkTypes.testLinkName AND l.inwardIssue
+```
+
+**Then per test, only POST if not already present:**
+```
+if <TEST_KEY> not in existingTestKeys:
+  mcp__atlassian__createIssueLink(
+    cloudId,
+    type: config.linkTypes.testLinkName  // default "Test" — see Issue Link Types Reference
+    inwardIssue: <TEST_KEY>,              // active subject (named by outward label "tests")
+    outwardIssue: <EPIC_KEY>              // passive object (named by inward label "is tested by")
+  )
+  status: "created"
+else:
+  status: "skipped-already-linked"
+```
+
+Report both counts in Step 9 summary: `created: N, skipped (already linked): M, failed: K`.
+
+**Directionality** (Jira convention): `inwardIssue` is the issue whose role matches the link type's **outward** label; `outwardIssue` matches the **inward** label. For `Test` link type (`outward="tests"`, `inward="is tested by"`):
+- The Test "tests" the Epic → Test = `inwardIssue`
+- The Epic "is tested by" the Test → Epic = `outwardIssue`
+
+Result on Epic page: "is tested by `<TEST_KEY>`" appears in the Issue Links panel.
+Result on Test page: "tests `<EPIC_KEY>`" appears.
+
+**API fallback when Atlassian MCP cannot see the issue** (some tenants/permissions block recent issues from the MCP — see `xray-cloud-api-access` memory pattern): use Playwright with in-browser `fetch()` (see `corporate-tls-workaround` memory for the validated pattern). The pre-check + create pattern is the SAME — just run both fetches inside `mcp__plugin_playwright_playwright__browser_evaluate`. The idempotency rule still applies: GET `issuelinks` first, build the existing-keys set, then POST only for missing pairs.
+
+Validated 2026-05-22 on FIFAGEN tenant: pre-check via `GET /rest/api/3/issue/<EPIC>?fields=issuelinks` (session-cookie auth), filter on `type.name == "Test" && inwardIssue`, build a `Set<TEST_KEY>`, then `POST /rest/api/3/issueLink` only for tests not in the set. Catches both same-batch retries and cross-batch reruns.
+
+##### 8.1.b — Verify Issue Links Table on Epic
+
+After the link is created (whether via API or Playwright), confirm it appears in the Epic's **Issue Links** section. Two verification paths:
+
+**Path A — API** (when MCP visibility allows):
+```
+mcp__atlassian__getJiraIssue(cloudId, issueIdOrKey=<EPIC_KEY>, fields=["issuelinks"])
+```
+Assert: at least one entry in `fields.issuelinks[]` where `type.inward == "is tested by"` AND `inwardIssue.key == <TEST_KEY>`.
+
+**Path B — Playwright** (when API can't see the Epic):
+- `mcp__plugin_playwright_playwright__browser_navigate` → `https://<site>/browse/<EPIC_KEY>`
+- `mcp__plugin_playwright_playwright__browser_snapshot` (capture full page)
+- Search snapshot text for the pattern: `is tested by` followed by `<TEST_KEY>`
+- Take a `mcp__plugin_playwright_playwright__browser_take_screenshot` for evidence (filename pattern: `verify_link_<EPIC_KEY>_<TEST_KEY>.png`)
+
+Record the verification outcome (`linked: true/false`) on the test's result record so Step 9's summary can display it as a new column.
 
 #### 8.2 Parallel Creation (after pilot approved)
 For each remaining test case, spawn a `general-purpose` agent with `run_in_background: true`. All agents in a single message → true parallel execution.
@@ -392,7 +451,8 @@ For each remaining test case, spawn a `general-purpose` agent with `run_in_backg
 - `OUTPUT_MODE`, `cloudId`, `EPIC_KEY`, `loginEmail`
 - `xrayMethod` ("API" or "Playwright") so the agent knows how to add native steps
 - Custom field IDs from config
-- Instructions to return JSON result: `{status, testCaseId, jiraKey, url, xrayStepsAdded, error}`
+- **`linkTypeName`** from `config.linkTypes.testLinkName` (default `"Test"`) for the "is tested by" link creation in Step 8.1.a (parallel agents perform 8.1.a per test, but defer 8.1.b verification to the orchestrator in Step 9)
+- Instructions to return JSON result: `{status, testCaseId, jiraKey, url, xrayStepsAdded, isTestedByLinkCreated, error}`
 
 #### 8.3 Add Xray Native Test Steps
 **Method A — Xray Cloud API** (when `xrayMethod == "API"`):
@@ -441,13 +501,17 @@ Total: <N>
 Pilot: <PILOT_KEY>
 Parallel agents: <M>
 Success rate: <X>/<N>
+"is tested by" link rate: <Y>/<N>  (counted after Step 8.1.b verification on Epic Issue Links table)
 
-| # | TC ID | Jira Key | Xray Steps | Status | Link |
-| - | ----- | -------- | ---------- | ------ | ---- |
+| # | TC ID | Jira Key | Xray Steps | is tested by | Status | Link |
+| - | ----- | -------- | ---------- | ------------ | ------ | ---- |
 ...
 
 Failed cases (if any):
 | TC ID | Error | Suggested action |
+
+Failed link creations (if any):
+| TC ID | Test Key | Reason | Suggested action |
 ```
 
 **BOTH:** combine — lead with CSV path, then the API table. Note that CSV is the rollback artifact if API had failures.
@@ -561,6 +625,27 @@ Default IDs (override in `config.json` per tenant):
 | `customfield_10014` | Epic Link | Parent epic |
 | `customfield_11985` | Manual Test Steps | Legacy ADF steps field |
 | `customfield_12591` | Rovo Manual Steps | Rovo agent field |
+
+---
+
+## Issue Link Types Reference
+
+Configurable via `config.linkTypes.testLinkName` (default: `"Test"`). Discover available types per tenant via `mcp__atlassian__getIssueLinkTypes`.
+
+| Link Type Name | Inward Label | Outward Label | Use For |
+|----------------|--------------|---------------|---------|
+| `Test` (default) | `is tested by` | `tests` | Standard Jira test linking — Epic page shows "is tested by <TEST>" |
+| `Epic-Test Link` | `Epic Tested By` | `Test for Epic` | Tenant-specific variant (some legacy projects) |
+
+**API directionality reminder** (`mcp__atlassian__createIssueLink`):
+- `inwardIssue` = the issue whose role is the **outward** label of the type (the active subject)
+- `outwardIssue` = the issue whose role is the **inward** label of the type (the passive object)
+
+So for `Test` type, to make Epic display "is tested by Test":
+```
+inwardIssue = <TEST_KEY>      # Test "tests" the Epic
+outwardIssue = <EPIC_KEY>     # Epic "is tested by" the Test
+```
 
 ---
 
