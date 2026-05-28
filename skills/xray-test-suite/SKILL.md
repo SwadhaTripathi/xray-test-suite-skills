@@ -15,6 +15,19 @@ End-to-end workflow for authoring and importing Xray test cases:
 4. **Mode pick** — user chooses: CSV / API / Both
 5. **Output** — CSV file in `output/`, Jira issues via API, optional Playwright upload
 
+## Per-Test Wiring Checklist (every test created must satisfy ALL of these)
+
+Regardless of which output mode was chosen, every test issue created during a run must end up with the following state. The skill MUST verify (or perform) each of these for every test before reporting success in Step 9:
+
+1. **Test issue with steps in CSV** — test case generated with Action / Data / Expected Result rows, saved to `output/TestCases_<EPIC_KEY>_<TIMESTAMP>.csv` (Step 6).
+2. **Imported via bulk importer + Playwright** — CSV uploaded through the Xray Test Case Importer UI driven by Playwright MCP (Step 7), OR equivalent API creation flow (Step 8) for the API_ONLY mode.
+3. **Xray native test steps verified present** — after creation, the Test Details tab on each created Jira test must have populated steps (Step 8.3 verification — applies to both CSV-import path and API path).
+4. **Test linked to its Epic (Epic Link / `customfield_10014`)** — set during CSV import via column 8, or via `editJiraIssue` post-creation in API mode (Step 8.1).
+5. **Epic shows "is tested by" link to the test** — separate from Epic Link; created via `createIssueLink` with `outwardIssue=<TEST>, inwardIssue=<EPIC>` (Step 8.1.a — applies to both paths).
+6. **"Reported by AI" = Yes** — `customfield_14374` set on every AI-generated test, in bulk after creation (Step 8.4 — applies to both paths). Makes AI-generated tests filterable via JQL `"Reported by AI" = Yes`.
+
+These six items are NOT optional steps — they're the **completion contract**. Any test that ends a run with any of these missing should be reported in Step 9 as incomplete and offered for retry.
+
 ---
 
 ## Configuration
@@ -364,6 +377,16 @@ If yes, run the upload sub-workflow:
 On success: list created Jira keys (read from the importer's results page — do NOT hardcode).
 On failure: report error + screenshot, suggest checking CSV format or field mappings.
 
+#### 7.9 Post-import Wiring (REQUIRED, both CSV_ONLY and BOTH modes)
+
+After the importer reports success and the new Jira keys are harvested, run these finalization steps so the CSV-import path produces tests in the same fully-wired state as the API path:
+
+1. **Create "is tested by" links** — for each created test, perform the idempotent pre-check + POST from Step 8.1.a (the CSV importer does NOT create issue links — only the Epic Link customfield).
+2. **Verify Xray native test steps** — for each created test, GET the Test Details tab (Playwright `browser_navigate` + `browser_snapshot`, or Xray Cloud API `GET /api/v2/test/<KEY>/steps`) and assert ≥1 step is present. If any test has zero steps, the CSV's `__xray_step_*` columns were either empty or mismapped — flag for retry.
+3. **Bulk-tag "Reported by AI" = Yes** — run Step 8.4 against the full list of created Jira keys.
+
+These steps are NOT optional: skipping any of them produces a half-wired test that violates the Per-Test Wiring Checklist at the top of this skill.
+
 **Selector strategy (in order of preference):** text → role → data-testid → CSS → XPath. Take fresh snapshot after each major action. Iframes: Xray Test Case Importer runs in an iframe — use iframe refs from snapshots.
 
 ---
@@ -475,7 +498,62 @@ Token TTL is ~15 minutes — each agent authenticates independently.
 
 **Method B — Playwright** (when `xrayMethod == "Playwright"`): Navigate to test issue → Test Details tab → loop "Add Step / New Step" for each step, filling Action / Data / Expected Result fields. UI runs in an iframe — refresh snapshot between actions.
 
-#### 8.4 Error Isolation
+#### 8.4 Bulk-tag "Reported by AI" = Yes (orchestrator step, both paths)
+
+**Purpose:** Tag every created test with the AI-generation marker so they're filterable in Jira (`"Reported by AI" = Yes`) for audit and traceability. Required by the FIFAGEN tenant convention; configurable per tenant via `config.fields.reportedByAi`.
+
+**When this runs:**
+- After Step 7 (Playwright CSV import) — for CSV_ONLY and BOTH modes, run this once the importer success page shows the created Jira keys.
+- After Step 8.2 (parallel API creation) — for API_ONLY and BOTH modes, run this once all parallel agents have returned and the orchestrator has the full key list.
+
+**Field details (FIFAGEN tenant default):**
+
+| Property | Value | Override |
+|---|---|---|
+| ID | `customfield_14374` | `config.fields.reportedByAi.id` |
+| Name | `Reported by AI` | `config.fields.reportedByAi.name` |
+| Schema | `option` | — |
+| Payload | `{value: "Yes"}` | `config.fields.reportedByAi.value` |
+
+**Implementation** — use Playwright `browser_evaluate` with one batched fetch loop (validated 2026-05-28 on 85 tests across 4 epics, 100% success):
+
+```js
+async () => {
+  const keys = [/* every Jira test key created in this run */];
+  const batchSize = 15;
+  let ok = 0, failed = [];
+  for (let i = 0; i < keys.length; i += batchSize) {
+    const batch = keys.slice(i, i + batchSize);
+    const results = await Promise.all(batch.map(async k => {
+      const r = await fetch('/rest/api/3/issue/' + k, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json', 'X-Atlassian-Token':'no-check'},
+        credentials: 'include',
+        body: JSON.stringify({ fields: { customfield_14374: { value: 'Yes' } } })
+      });
+      return { k, ok: r.ok, status: r.status };
+    }));
+    ok += results.filter(r => r.ok).length;
+    failed.push(...results.filter(r => !r.ok));
+  }
+  return { ok, failed_count: failed.length, failed_keys: failed.map(f => f.k) };
+}
+```
+
+> ⚠ **Editmeta gotcha**: on the FIFAGEN tenant, `customfield_14374` is NOT exposed via `GET /rest/api/3/issue/<KEY>/editmeta` for the Test issue type (it's not on the Test edit screen scheme). The direct PUT works anyway because the field IS in the contextual scope. Don't use editmeta as a gatekeeper — try the PUT and check the response. A 204 response means it took.
+
+**Verification (REQUIRED — double-check via two independent paths):**
+
+1. **Per-issue sample GET** — pull `customfield_14374` from 3-5 keys spanning all epics; assert `value: "Yes"`.
+2. **JQL sweep** — `issue in (<every key>) AND "Reported by AI" = Yes` — must return exactly `keys.length` issues. If lower, list which keys are missing and retry.
+
+Both checks must pass before declaring the bulk-tag complete. Either alone has a blind spot (sample misses non-sampled failures; JQL sweep doesn't tell you WHICH key failed).
+
+**On failure:** If any tests didn't take the tag, retry those keys once (network blips are the common cause); if still failing, list them in Step 9 with the HTTP status returned. Don't silently drop the failures.
+
+See `feedback-reported-by-ai-field-tagging` memory for the validated pattern and reusable JQL filter.
+
+#### 8.5 Error Isolation
 Agent failures are scoped to single tests. Other agents continue. Failed tests are reported in Step 9 and can be retried.
 
 ---
@@ -506,9 +584,10 @@ Pilot: <PILOT_KEY>
 Parallel agents: <M>
 Success rate: <X>/<N>
 "is tested by" link rate: <Y>/<N>  (counted after Step 8.1.b verification on Epic Issue Links table)
+"Reported by AI" = Yes tag rate: <Z>/<N>  (counted after Step 8.4 JQL verification sweep)
 
-| # | TC ID | Jira Key | Xray Steps | is tested by | Status | Link |
-| - | ----- | -------- | ---------- | ------------ | ------ | ---- |
+| # | TC ID | Jira Key | Xray Steps | is tested by | Reported by AI | Status | Link |
+| - | ----- | -------- | ---------- | ------------ | -------------- | ------ | ---- |
 ...
 
 Failed cases (if any):
@@ -516,6 +595,9 @@ Failed cases (if any):
 
 Failed link creations (if any):
 | TC ID | Test Key | Reason | Suggested action |
+
+Failed "Reported by AI" tag patches (if any):
+| Test Key | HTTP status | Suggested action |
 ```
 
 **BOTH:** combine — lead with CSV path, then the API table. Note that CSV is the rollback artifact if API had failures.
