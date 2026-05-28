@@ -43,6 +43,7 @@ Templates: `config.sample.json` and `credentials.sample.json` are committed. See
 - **ALWAYS derive CSV column order from `importConfiguration.json` — never hardcode**
 - **ALWAYS add Xray native test steps to the "Test Details" tab in API mode** (via API if credentials exist, else Playwright)
 - **PAUSE for clarification when requirements are ambiguous — do not guess at safety-critical or business-critical behavior**
+- **NEVER fabricate expected results when the SRS is silent on the recovery / failure / edge-case behavior**. Instead, write the expected result as the literal token `[OPEN FOR SPEC OWNER INPUT]` followed by the open question. This convention makes it greppable later and avoids the trap of inventing behavior that doesn't match what gets shipped. (Validated 2026-05-28 on 22 Map-family gap-fill tests where 12 of 22 SRS clauses required this treatment.)
 
 ---
 
@@ -190,9 +191,12 @@ loop:
 | `Coverage` | Generate a new TC covering each missing requirement ID from `coverage_gaps[]` |
 | `StateMachine` | Generate a new TC for each missing transition |
 | `Mapping` | Fix the named TC's `requirement_ids` array to match what its steps actually exercise |
-| `MergeOpportunity` | Merge tests per `merge_suggestions[]`: keep `merge_into`'s TC ID; absorb steps + `requirement_ids` from the named TCs in `absorb[]`; remove the absorbed TCs |
+| `MergeOpportunity` | Merge tests per `merge_suggestions[]`: keep `merge_into`'s TC ID; absorb steps + `requirement_ids` from the named TCs in `absorb[]`; remove the absorbed TCs. **Compare INTENT (objective + `requirement_ids`), not only step text — TCs covering the same SRS Open Issue or scenario are merge candidates even with non-overlapping steps.** |
 | `Template` | Rewrite the offending step's `action` / `data` / `expected_result` per the reviewer's `suggested_fix` |
 | `DiagramCoverage` | Extend or add a TC referencing the missed visual element |
+| `PriorityLadder` | Generate per-rule isolated-collision TCs for each missing rule; add one full-ladder top→down release TC per affected signal. For safety-critical signals (alarm-bearing, buzzer, emergency-stop equivalents) lift severity to Critical regardless of `severityThreshold` |
+| `APIContract` | Generate a direct-call TC for each named method; if `oneof` / Result / Either pattern is referenced, add explicit success AND error wire-shape assertions; for documented parameter ranges, add boundary-value tests for `-1`, `max+1`, and one oversized value |
+| `SpecCompletenessGap` | Generate a new characterization TC for each sub-check (a-j) that has no covering TC. When the SRS is silent on recovery / failure / decision (sub-checks a, c, d, g, j most commonly), set the expected_result to the literal token `[OPEN FOR SPEC OWNER INPUT]` followed by the specific open question — never invent behavior. For (a) cross-spec contradictions, the new TC must explicitly call out which existing test(s) it contradicts, so spec owner can reconcile. For (g) `Comment:` / `Need to add` annotations, the new TC's Description must quote the SRS annotation verbatim. |
 | Issues below `severityThreshold` | Note in the iteration summary; do NOT trigger refinement |
 
 After each refinement, re-number TC IDs to remain dense (TC-001, TC-002…) and preserve `requirement_ids` traceability.
@@ -568,25 +572,92 @@ Detailed I/O specification for the Step 4.5 reviewer subagent.
 | Severity rubric | Critical / High / Medium / Low with examples (see below) | |
 | Output instruction | "Return JSON only — no prose preamble or postamble. Conform to the schema below." + the schema | |
 
-### Six Review Jobs
+### Pre-pass: SRS Annotation Catalog
 
-The reviewer must check each:
+**Before running the 9 review jobs**, the reviewer must scan the source materials and build a catalog of:
 
-1. **Coverage** — Re-extract requirement IDs (R1, R2…) from source. Every R-ID must map to ≥1 TC's `requirement_ids` array. Report missing R-IDs in `coverage_gaps[]` and emit a `Coverage` issue.
-2. **Mapping** — For each TC, the steps must actually exercise the requirements listed in `requirement_ids`. Flag: requirements claimed but not tested, or steps testing un-listed requirements.
+- **Struck-through / obsolete text** — paragraphs, requirements, or sentences with strikethrough formatting (`~~...~~` in markdown, `<s>` in HTML, struck-through font in Word/PDF). Treat as obsolete; any TC that tests struck-through behavior is a candidate for retirement.
+- **Spec-author annotations** — every occurrence of `Comment:`, `Note:`, `Need to add`, `Should we`, `Define`, `TBD`, `Open Question`, `🔴 Missing`, or similar self-flagged-gap markers. Each annotation is a SELF-IDENTIFIED gap by the spec author.
+- **Cross-spec references** — text like "Part of XYZ spec", "See also ABC SRS", "tracked in <other doc>". Each cross-ref means the reviewer must check (a) whether the referenced spec actually covers what was deferred, and (b) whether the matrix tests the interaction at the boundary.
+- **"Example shows but doesn't require" sentinel values** — values appearing in printed-log examples or sample tables that aren't called out as requirements (e.g., `unknown` slot tokens in a printed map example). These are usually valid runtime states that real tests miss.
+
+This catalog feeds the new **SpecCompletenessGap** review job (#9) below.
+
+### Nine Review Jobs
+
+The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all jobs**: when checking whether a TC covers a documented identifier (PLC tag, enum value, requirement ID, API method, rule), accept abbreviated/full-form/synonymous variations as equivalent unless the verification is explicitly about verbatim string matching. Example: `WATCH_DOG_ALARM` and `BRV_TOWER_WATCH_DOG_ALARM` refer to the same tag — do NOT flag the abbreviated form as missing coverage.
+
+1. **Coverage** — Re-extract identifiers from source independently. The reviewer must enumerate ALL of:
+   - **Requirement IDs** (R1, R2…, UC-001…) — every R-ID must map to ≥1 TC's `requirement_ids` array
+   - **Enum values** in category/parameter tables — including values that have NO matching rule (which should default to OFF/inactive); each enum value (including the no-rule ones) needs a reachability TC
+   - **Shipped default configuration values** — when SRS documents a default (e.g., `watchdog.timeout default = 9999 = disabled`), the default-config behavior must have its OWN dedicated TC (testing only non-default configurations is a category-error; the default ships to every customer)
+   - **PLC / device / hardware tag entries** with documented values or semantics (including default values and special command values like `OTHER = No change`) — each documented tag must have an assertion in at least one TC
+   - **Open Issues / Known Issues / Unresolved sections** of the SRS — each Open Issue must have a TC pinning current behavior OR an explicit out-of-scope traceability note in the matrix
+   - **Non-Functional Requirements** AND **explicit "missing tests" / "recommended test enhancements" / "🔴 Missing" sections of the SRS** — these are quite literally the SRS author telling you what's missing; every entry must have ≥1 TC
+   
+   Severity: Critical for shipped-default-config misses and items the SRS explicitly flags as missing; High for enum values, Open Issues, NFRs without coverage; Medium for tag-level documentation assertions.
+
+2. **Mapping** — For each TC, the steps must actually exercise the requirements listed in `requirement_ids`. Flag: requirements claimed but not tested, or steps testing un-listed requirements. **Apply paraphrase tolerance**: a step that asserts `WATCH_DOG_ALARM=0` covers a requirement that references `BRV_TOWER_WATCH_DOG_ALARM`.
+
 3. **StateMachine** — If source contains a state machine (text or diagram), every transition must have ≥1 covering TC. Report missing transitions as `category: "StateMachine"` issues.
-4. **MergeOpportunity** — Two TCs with ≥80% step overlap, or where one's data set is a subset of the other's, are merge candidates. Emit `merge_suggestions[]` entries.
-5. **Template** (skip if `template_issue_key == null`) — Fetch the template Xray test via `mcp__atlassian__getJiraIssue` + Xray Cloud `GET /api/v2/test/<KEY>/steps`. Derive shape rules (verb-first actions; measurable expected results — no "works correctly"; data field semantics). Flag steps that violate them.
-6. **DiagramCoverage** — For each visual element / state / transition / box in attached diagrams, verify some TC references it. Flag uncited elements.
+
+4. **PriorityLadder** (NEW) — For each multi-rule priority ladder in the SRS (e.g., Red has 5 rules; Buzzer has 3; Yellow has 7; Green has 5):
+   - Every individual rule must have ≥1 TC asserting it isolated **with a conflicting event present** (the rule fires while a different rule could also match)
+   - At least one full-ladder TC must exercise the complete top→down release sequence (P1 wins → clear → P2 wins → clear → ... → Pn → OFF)
+   - For ladders ≥3 rules, every adjacent-priority collision (Pn vs Pn+1) must have either a dedicated TC or be exercised in a multi-event TC
+   
+   Severity: High by default, Critical for safety-critical signals (alarm-bearing, buzzer, emergency-stop equivalents).
+
+5. **APIContract** (NEW) — When the SRS lists explicit API methods (gRPC, REST, RPC, message bus, etc.):
+   - Every method must have ≥1 **direct-call** TC. End-to-end coverage is necessary but not sufficient — a reviewer who only sees E2E will reject the suite as missing unit-level method coverage
+   - If methods use `oneof` / `Result` / `Either` / discriminated-union error contracts, both success AND error wire shapes must be asserted
+   - For documented parameter ranges (e.g., `signal_id 0-4`), boundary values (`-1`, `max+1`, `100`, oversized) must be in a TC
+   
+   Severity: Critical for any public method without direct-call coverage; High for missing error-path coverage and missing parameter-boundary tests.
+
+6. **MergeOpportunity** (STRENGTHENED) — Two TCs are merge candidates when ANY of:
+   - ≥80% step overlap
+   - One's data set is a subset of the other's
+   - **Both test the same SRS open-issue, requirement, or scenario described in their objectives — even with different step shape**. Compare INTENT and `requirement_ids`, not only step text. Example: TC-A "watchdog lifecycle including timeout<reset_interval validation" and TC-B "Open Issue #5: reset_interval > timeout misconfig" overlap at intent level despite different step phrasings.
+   
+   Emit `merge_suggestions[]` entries.
+
+7. **Template** (skip if `template_issue_key == null`) — Fetch the template Xray test via `mcp__atlassian__getJiraIssue` + Xray Cloud `GET /api/v2/test/<KEY>/steps`. Derive shape rules (verb-first actions; measurable expected results — no "works correctly"; data field semantics). Flag steps that violate them.
+
+8. **DiagramCoverage** — For each visual element / state / transition / box in attached diagrams, verify some TC references it. Flag uncited elements.
+
+9. **SpecCompletenessGap** (NEW — validated 2026-05-28) — Validates the matrix against common production scenarios that SRSes routinely omit. The 8 prior jobs check completeness against what's WRITTEN; this job checks completeness against what production tools NEED but SRSes don't enumerate. For each of these 10 sub-checks, flag a missing TC if no existing TC addresses it AND the source does not explicitly mark it out of scope:
+
+   a. **Cross-spec contradiction (Critical)** — If the SRS contains struck-through text (from the pre-pass catalog) and any TC tests that struck-through behavior, flag for spec-owner reconciliation. If multiple linked SRSes contradict each other, the matrix must contain at least one characterization TC that exposes the contradiction.
+
+   b. **Multi-instance behavior (High)** — When SRS describes a singular resource ("the device", "the load port", "the pipe", "the lane") but the production system has N instances, the matrix must include at least one multi-instance isolation TC asserting an operation on instance A doesn't mutate instance B's state. (Example from this session: 9 Powerup tests all assumed single Load Port; real tools have 2-4.)
+
+   c. **Hardware-failure path (High)** — For each spec step that calls hardware (sensor, motor, robot, mapper, valve, network), the matrix must contain ≥1 characterization TC for "hardware returns failure / non-response / sensor unknown". When SRS is silent on recovery, mark expected result `[OPEN FOR SPEC OWNER INPUT]`.
+
+   d. **Intermediate / partial-state recovery (High)** — For multi-step sequences (e.g., load = Clamp → Dock → Open → Map → Create), the matrix must include ≥1 TC for the partial-state case (shutdown after Clamp but before Dock). Power loss can leave hardware in these intermediate states. When SRS is silent, mark `[OPEN FOR SPEC OWNER INPUT]`.
+
+   e. **Default-config persistence (High)** — Job 1's "shipped default configuration values" rule already requires a default-value TC; this sub-check additionally requires verifying the default persists across clean install AND clean reset AND power cycle.
+
+   f. **Cross-session / cross-feature interaction (Medium)** — When two features share state (e.g., Diagnostics ↔ Production, EU ↔ Power-up, Multiple commands targeting the same resource), the matrix must include ≥1 TC asserting one feature's operations don't mutate the other's persisted state when transitioning between sessions.
+
+   g. **Spec-author "Comment:" annotations (Critical)** — From the pre-pass catalog: every `Comment:` / `Need to add` / `Should we` / `Define` / `TBD` / `Open Question` annotation is a SELF-IDENTIFIED gap by the spec author. Every such annotation must have either a TC pinning current behavior with `[OPEN FOR SPEC OWNER INPUT]` markers, OR an explicit out-of-scope traceability note. This is the highest-leverage check: the spec author already told you it's missing. (Example: MoU SRS `Comment: Need to add a case when Cassette is removed during power down... Part of MAP During power up SRS` — but Powerup SRS Rev 3 didn't address it. Now covered by FIFAGEN-16207 and FIFAGEN-16208.)
+
+   h. **Non-binary sensor/data states (Medium)** — From the pre-pass catalog of "Example shows but doesn't require" sentinel values: if SRS examples or error messages mention values like `unknown`, `unspecified`, `not applicable`, `<null>`, the matrix must include a TC exercising those values (not just binary True/False / present/absent cases). (Example: R003.5a printed-map example showed `unknown` tokens — but no test exercised mismatch with unknown values.)
+
+   i. **Same-instance vs new-instance ambiguity (Medium)** — When SRS says "load a NEW cassette" / "send another request" / "open another session", check whether the matrix also covers "re-load the SAME instance". Usually implicitly the same behavior, but SRS rarely states so — ambiguity worth flagging.
+
+   j. **Operator-interrupt scenarios (Low)** — Power-down during power-up, cancel during a pending operation, second command while first in flight, browser-close during a multi-step UI flow. SRS rarely covers; mark `[OPEN FOR SPEC OWNER INPUT]` if recovery is undefined.
+
+   **Output**: feed back into the regular `issues[]` array with `category: "SpecCompletenessGap"`. **Severity defaults**: Critical for (a) and (g); High for (b), (c), (d), (e); Medium for (f), (h), (i); Low for (j). Override per safety/business impact judgment.
 
 ### Severity Rubric
 
 | Severity | Examples |
 |----------|----------|
-| Critical | Missing requirement coverage; safety/compliance miss; broken state transition with no covering test |
-| High | Vague expected results ("works correctly", "is correct"); mapping error; missing edge case explicitly listed in source |
-| Medium | Merge opportunity; minor template-shape deviation; redundant test |
-| Low | Stylistic phrasing; non-essential ordering |
+| Critical | Missing requirement coverage; safety/compliance miss; broken state transition with no covering test; **missing TC for any shipped default configuration value (the default ships to every customer)**; **missing direct-call coverage of any documented public API method**; **any item explicitly listed as "🔴 Missing" / "Missing Critical Tests" / "Required" / "Recommended Test Enhancements" in the SRS itself (the SRS author already told you it's missing — failing to enumerate this is the reviewer's most damning miss)**; **SpecCompletenessGap sub-checks (a) cross-spec contradiction / struck-through-text TC and (g) any `Comment:` / `Need to add` / `Should we` / `Define` / `TBD` annotation in the SRS without a covering TC — the spec author already self-identified the gap** |
+| High | Vague expected results ("works correctly", "is correct"); mapping error; missing edge case explicitly listed in source; **missing rule in an N-rule priority ladder (every rule needs an isolated-collision TC)**; **missing enum value reachability test (including no-rule enum values that should default OFF)**; **missing direct-call test for an API method's error / oneof path**; **SRS Open Issue not addressed (no TC pinning current behavior AND no explicit out-of-scope flag)**; **NFR section without any covering TC**; **SpecCompletenessGap sub-checks (b) multi-instance behavior, (c) hardware-failure path, (d) intermediate / partial-state recovery, (e) default-config persistence — these are production-required even when SRS is silent** |
+| Medium | Merge opportunity (especially intent-level overlap, not just step overlap); minor template-shape deviation; redundant test; **documented PLC / device / hardware tag default value without an assertion in any TC**; **minor enum-value verbatim / typo string-match deviation (when verbatim match was a stated requirement)**; **SpecCompletenessGap sub-checks (f) cross-session / cross-feature interaction, (h) non-binary sensor/data states, (i) same-instance vs new-instance ambiguity** |
+| Low | Stylistic phrasing; non-essential ordering; **SpecCompletenessGap sub-check (j) operator-interrupt scenarios** |
 
 ### Output JSON Schema
 
@@ -597,7 +668,7 @@ The reviewer must check each:
   "summary": "<one-line human summary>",
   "issues": [
     {
-      "category": "Coverage" | "Mapping" | "StateMachine" | "MergeOpportunity" | "Template" | "DiagramCoverage",
+      "category": "Coverage" | "Mapping" | "StateMachine" | "PriorityLadder" | "APIContract" | "MergeOpportunity" | "Template" | "DiagramCoverage" | "SpecCompletenessGap",
       "severity": "Critical" | "High" | "Medium" | "Low",
       "test_id": "TC-001" | null,
       "requirement_ids": ["R1", "R5"],
