@@ -12,8 +12,9 @@ End-to-end workflow for authoring and importing Xray test cases:
 1. **Input** — Jira Epic/Story, Confluence page, local file (.md/.pdf/.pptx/.docx/.png/.drawio/.txt), or pasted text
 2. **Analyze** — extract requirements, categorize (positive/negative/edge/safety), optimize via merging
 3. **Approve** — present test matrix; wait for user APPROVE
-4. **Mode pick** — user chooses: CSV / API / Both
-5. **Output** — CSV file in `output/`, Jira issues via API, optional Playwright upload
+4. **Traceability gate** — generate traceability matrix (.xlsx), get user sign-off (Step 4.7)
+5. **Mode pick** — user chooses: a) xray-mcp (default) / b) CSV import / c) playwright-mcp
+6. **Output** — tests via xray-mcp, or CSV in `output/`, or Xray UI via Playwright
 
 ## Per-Test Wiring Checklist (every test created must satisfy ALL of these)
 
@@ -23,7 +24,7 @@ Regardless of which output mode was chosen, every test issue created during a ru
 2. **Imported via bulk importer + Playwright** — CSV uploaded through the Xray Test Case Importer UI driven by Playwright MCP (Step 7), OR equivalent API creation flow (Step 8) for the API_ONLY mode.
 3. **Xray native test steps verified present** — after creation, the Test Details tab on each created Jira test must have populated steps (Step 8.3 verification — applies to both CSV-import path and API path).
 4. **Test linked to its Epic (Epic Link / `customfield_10014`)** — set during CSV import via column 8, or via `editJiraIssue` post-creation in API mode (Step 8.1).
-5. **Epic shows "is tested by" link to the test** — separate from Epic Link; created via `createIssueLink` with `outwardIssue=<TEST>, inwardIssue=<EPIC>` (Step 8.1.a — applies to both paths).
+5. **Epic shows "is tested by" link to the test** — separate from Epic Link; created via `createIssueLink` with `inwardIssue=<TEST>, outwardIssue=<EPIC>` (Step 8.1.a — applies to both paths). Read the link back and confirm the test's `issuelinks` entry shows `outwardIssue=<EPIC>` (verified-correct direction; matches the 8.1.a body).
 6. **"Reported by AI" = Yes** — `customfield_14374` set on every AI-generated test, in bulk after creation (Step 8.4 — applies to both paths). Makes AI-generated tests filterable via JQL `"Reported by AI" = Yes`.
 
 These six items are NOT optional steps — they're the **completion contract**. Any test that ends a run with any of these missing should be reported in Step 9 as incomplete and offered for retry.
@@ -52,9 +53,11 @@ Templates: `config.sample.json` and `credentials.sample.json` are committed. See
 - **WHEN `config.reviewer.enabled = true`, NEVER skip Step 4.5 — automated review is the primary gate**; manual APPROVE is only the fallback when reviewer is disabled OR when the user opts out via the escalation menu after iteration `maxIterations`
 - **NEVER leak credentials, tokens, or secrets in outputs**
 - **ALWAYS present the draft test matrix with coverage before any creation**
-- **ALWAYS ask the user to pick output mode (CSV / API / Both) — do not assume**
+- **ALWAYS ask the user to pick output mode — `a) xray-mcp (default)`, `b) CSV import`, `c) playwright-mcp` — do not assume; default to xray-mcp**
 - **ALWAYS derive CSV column order from `importConfiguration.json` — never hardcode**
-- **ALWAYS add Xray native test steps to the "Test Details" tab in API mode** (via API if credentials exist, else Playwright)
+- **EACH STEP CONTAINS EXACTLY ONE VERIFICATION POINT** — one observable assertion per step. Split compound checks (gRPC-state vs PLC-tag → two steps; a multi-signal snapshot → one step per signal; "consumed" AND "no error logged" → two steps). Enforced at generation (Step 4), by the reviewer (Job 10), and in every output mode.
+- **ALWAYS produce the traceability matrix (.xlsx) and get explicit user review/sign-off BEFORE any step creation or import (Step 4.7)** — no `createTestWithSteps` / `addTestStep` / CSV import / Playwright upload runs until the traceability xlsx is approved
+- **ALWAYS add Xray native test steps to the "Test Details" tab** (xray-mcp `createTestWithSteps`/`addTestStep`, or Playwright UI; never leave a created test step-less)
 - **PAUSE for clarification when requirements are ambiguous — do not guess at safety-critical or business-critical behavior**
 - **NEVER fabricate expected results when the SRS is silent on the recovery / failure / edge-case behavior**. Instead, write the expected result as the literal token `[OPEN FOR SPEC OWNER INPUT]` followed by the open question. This convention makes it greppable later and avoids the trap of inventing behavior that doesn't match what gets shipped. (Validated 2026-05-28 on 22 Map-family gap-fill tests where 12 of 22 SRS clauses required this treatment.)
 
@@ -74,9 +77,12 @@ Templates: `config.sample.json` and `credentials.sample.json` are committed. See
 
 1. Read `${CLAUDE_SKILL_DIR}/references/config.json`. If missing, instruct user to `cp config.sample.json config.json` and abort.
 2. Read the credentials file at `config.credentialsPath` (default `~/.claude/.xray-credentials.json`). If missing or contains placeholder `<...>` values, abort with setup instructions.
-3. Determine `xrayMethod`:
-   - `credentials.xrayCloud.clientId` and `clientSecret` both non-empty → `xrayMethod = "API"`
-   - Otherwise → `xrayMethod = "Playwright"`
+3. Determine `xrayMethod` (how tests + native steps get written):
+   - **`xray-mcp` MCP server available (`mcp__xray-mcp__*` tools) → `xrayMethod = "xray-mcp"` (DEFAULT, preferred).** Confirm with `mcp__xray-mcp__test_simple`.
+   - Else `credentials.xrayCloud.clientId` and `clientSecret` both non-empty → `xrayMethod = "API"`
+   - Else → `xrayMethod = "Playwright"`
+
+   Note: on tenants where the Xray Cloud GraphQL key is read-blind (`getTests → total:0`), the PAT-based `xray-mcp` gateway is the only working step read/write path — prefer it.
 
 If `$ARGUMENTS == "--dry-run"`: read both configs, print resolved values (REDACT secrets), and exit.
 
@@ -140,7 +146,14 @@ Route based on detected input type:
 - Shared setup grouped
 - Cleanup verification appended to positive tests
 
-**Internal test case schema** (drives both CSV and API output):
+**One verification per step (atomic steps) — REQUIRED:** author every step with exactly ONE observable verification in `expected_result`. Never bundle assertions in one step:
+- a gRPC/state read AND a PLC-tag read → two steps
+- a multi-signal snapshot ("Red BLINK, Green OFF, White ON") → one step per signal
+- "event consumed" AND "no error logged" → two steps
+
+When the target tool only appends (xray-mcp `addTestStep`), prefix each action with a stable `[NN]` index so intended order survives.
+
+**Internal test case schema** (drives all output modes):
 
 ```json
 {
@@ -238,29 +251,44 @@ Options 1 and 2 proceed to Step 5. Option 3 sets `iter = iter` (no increment) an
 
 ---
 
+### Step 4.7 — Traceability Matrix (.xlsx) + Review Gate (REQUIRED before any Jira write)
+
+After the matrix is approved (Step 4.5 / manual APPROVE) and BEFORE any output mode runs, generate a **traceability matrix as an .xlsx** and get explicit user sign-off. No `createTestWithSteps` / `addTestStep` / CSV import / Playwright upload may run until the user approves this file.
+
+1. Build `output/traceability_matrix_<EPIC_KEY>_<YYYYMMDD>.xlsx` (openpyxl) with:
+   - **Summary** tab: total tests, distinct requirements, total atomic step rows.
+   - **Test-to-Requirement** tab: TC ID | Jira Key (if known) | Pos/Neg | Priority | # Steps | Requirements Covered | Summary.
+   - **Requirement-to-Test** tab: Requirement / spec-query | # Tests | Tests covering it.
+2. Present the file path + a one-screen coverage summary; ask: `Review the traceability matrix — approve to proceed to creation/import? (yes / changes)`.
+3. **WAIT.** On "changes", revise (loop back to Step 4 / 4.5) and regenerate. Only on explicit approval proceed to Step 5.
+
+Rationale: step creation/import is effectively irreversible on append-only / import paths — catch coverage gaps in the xlsx, not in Jira.
+
+---
+
 ### Step 5 — Output Mode Selection (REQUIRED)
 
-After matrix approval, ask:
+After the traceability matrix is approved (Step 4.7), ask:
 
 ```
-## How would you like to deliver these test cases?
+## How would you like to generate these test cases?
 
-1. CSV only — import-ready CSV in output/, no Jira issues created until you run import manually
-2. API only — create Jira issues directly via API (pilot + parallel agents)
-3. Both — generate CSV first as backup, then proceed with API creation
+a) xray-mcp       — create tests + native steps directly via the xray-mcp gateway  [DEFAULT]
+b) CSV import     — import-ready CSV in output/, then the Xray Test Case Importer
+c) playwright-mcp — create / enter tests via Xray UI browser automation
 
-Reply: 1, 2, or 3
+Reply: a, b, or c   (default a)
 ```
 
-Map the answer to `OUTPUT_MODE` ∈ `{CSV_ONLY, API_ONLY, BOTH}`. Do not guess — re-ask if ambiguous.
+Map the answer to `OUTPUT_MODE` ∈ `{XRAY_MCP, CSV_IMPORT, PLAYWRIGHT}`. Default to `XRAY_MCP` when the user says "go" / "default". Do not guess between b and c — re-ask if ambiguous.
 
 **Routing:**
 
 | Mode | Steps that run |
 |------|----------------|
-| CSV_ONLY | 6 → 7 (offer Playwright upload) → 9 |
-| API_ONLY | 8 (pilot + parallel) → 9 |
-| BOTH | 6 → 7 (offer Playwright upload) → 8 → 9 |
+| XRAY_MCP (default) | 8 (xray-mcp pilot + serial creation) → 8.4 → 9 |
+| CSV_IMPORT | 6 (generate CSV) → 7 (Playwright importer upload + 7.9 wiring) → 9 |
+| PLAYWRIGHT | 8 (Method B: Xray UI step entry) → 8.4 → 9 |
 
 ---
 
@@ -391,25 +419,23 @@ These steps are NOT optional: skipping any of them produces a half-wired test th
 
 ---
 
-### Step 8 — API Creation (when OUTPUT_MODE ∈ {API_ONLY, BOTH})
+### Step 8 — Test Creation (when OUTPUT_MODE ∈ {XRAY_MCP, PLAYWRIGHT})
+
+**Primary path = `xray-mcp` gateway** (mode `XRAY_MCP`, default). Mode `PLAYWRIGHT` runs the same flow but enters tests/steps via the Xray UI (Method B in 8.3).
+
+**xray-mcp mechanics (learned constraints — obey them):**
+- **New tests:** `mcp__xray-mcp__createTestWithSteps(projectKey, summary, steps[])` creates the test WITH all steps ordered in one call (no reordering needed). It does NOT set description/priority/fields — set those afterwards via Atlassian MCP. Multiple new-test `createTestWithSteps` calls MAY run in parallel.
+- **Adding steps to an EXISTING test:** `mcp__xray-mcp__addTestStep` only — it **APPENDS to the end, one step per call**, and the gateway **rejects concurrency with HTTP 503**. Call it **strictly serially** (await each before the next); order is then preserved. Prefix each action with `[NN]` so order is self-evident/recoverable.
+- **No delete/update/insert step tool exists.** To rewrite an existing test's steps, append a clearly-labelled delete-marker step + the new `[NN]` atomic steps; the user deletes the old block in the UI.
+- The Xray Cloud GraphQL **API key may be read-blind on the tenant** (`getTests → total:0`); the PAT-based `xray-mcp` gateway is the working path. Verify with `mcp__xray-mcp__test_simple`.
 
 #### 8.1 Pilot Test
-Create ONE test case via `mcp__atlassian__createJiraIssue` to validate formatting before bulk creation.
+Create ONE test via `mcp__xray-mcp__createTestWithSteps` (atomic steps from the approved matrix) to validate formatting before bulk creation. Then:
+- Set fields via `mcp__atlassian__editJiraIssue`: `description` (Objective/Preconditions/Requirements/Priority/Tags), `priority {name}`, Epic Link `customfield_10014 = <EPIC_KEY>` (and `customfield_14374 = {value:"Yes"}` here or in bulk at Step 8.4).
+- **Create "is tested by" issue link (Step 8.1.a) and READ IT BACK** — the test's `issuelinks` entry must show `outwardIssue = <EPIC_KEY>` (verified-correct direction).
+- **Verify Issue Links table on Epic (Step 8.1.b).**
 
-```
-issueTypeName: "Test"
-summary: "[<EPIC_KEY>] <Category>: <Test Description>"
-description: <ADF body — see ADF Reference below>
-```
-
-Then:
-- Link to Epic (hierarchy): `mcp__atlassian__editJiraIssue` with `customfield_10014 = <EPIC_KEY>`
-- **Create "is tested by" issue link (Step 8.1.a — see below)**
-- Populate `customfield_11985` (manual test steps, ADF format)
-- Add Xray native steps (Step 8.3)
-- **Verify Issue Links table on Epic (Step 8.1.b — see below)**
-
-**Present pilot URL to user and WAIT for explicit approval before proceeding to 8.2.**
+**Present pilot URL to user and WAIT for explicit approval before proceeding to 8.2.** In 8.2, create remaining NEW tests with `createTestWithSteps` (may batch in parallel); use serial `addTestStep` only when appending to pre-existing tests.
 
 ##### 8.1.a — Create "is tested by" Issue Link (post-Epic-Link, IDEMPOTENT)
 
@@ -665,7 +691,7 @@ Detailed I/O specification for the Step 4.5 reviewer subagent.
 
 This catalog feeds the new **SpecCompletenessGap** review job (#9) below.
 
-### Nine Review Jobs
+### Ten Review Jobs
 
 The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all jobs**: when checking whether a TC covers a documented identifier (PLC tag, enum value, requirement ID, API method, rule), accept abbreviated/full-form/synonymous variations as equivalent unless the verification is explicitly about verbatim string matching. Example: `WATCH_DOG_ALARM` and `BRV_TOWER_WATCH_DOG_ALARM` refer to the same tag — do NOT flag the abbreviated form as missing coverage.
 
@@ -732,6 +758,8 @@ The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all
 
    **Output**: feed back into the regular `issues[]` array with `category: "SpecCompletenessGap"`. **Severity defaults**: Critical for (a) and (g); High for (b), (c), (d), (e); Medium for (f), (h), (i); Low for (j). Override per safety/business impact judgment.
 
+10. **AtomicSteps** (NEW) — Every step must contain **exactly one verification point**. Flag any step whose `expected_result` bundles multiple independent assertions (e.g. a gRPC state read AND a PLC-tag value; a multi-signal snapshot like "Red BLINK, Green OFF, White ON"; "consumed AND no error logged"). `suggested_fix` = "split <TC-id> step <n> into one step per verification". Severity: High — a bundled step defeats one-verification-per-step traceability and per-step pass/fail.
+
 ### Severity Rubric
 
 | Severity | Examples |
@@ -750,7 +778,7 @@ The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all
   "summary": "<one-line human summary>",
   "issues": [
     {
-      "category": "Coverage" | "Mapping" | "StateMachine" | "PriorityLadder" | "APIContract" | "MergeOpportunity" | "Template" | "DiagramCoverage" | "SpecCompletenessGap",
+      "category": "Coverage" | "Mapping" | "StateMachine" | "PriorityLadder" | "APIContract" | "MergeOpportunity" | "Template" | "DiagramCoverage" | "SpecCompletenessGap" | "AtomicSteps",
       "severity": "Critical" | "High" | "Medium" | "Low",
       "test_id": "TC-001" | null,
       "requirement_ids": ["R1", "R5"],
