@@ -691,7 +691,7 @@ Detailed I/O specification for the Step 4.5 reviewer subagent.
 
 This catalog feeds the new **SpecCompletenessGap** review job (#9) below.
 
-### Ten Review Jobs
+### Twelve Review Jobs
 
 The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all jobs**: when checking whether a TC covers a documented identifier (PLC tag, enum value, requirement ID, API method, rule), accept abbreviated/full-form/synonymous variations as equivalent unless the verification is explicitly about verbatim string matching. Example: `WATCH_DOG_ALARM` and `BRV_TOWER_WATCH_DOG_ALARM` refer to the same tag — do NOT flag the abbreviated form as missing coverage.
 
@@ -760,6 +760,21 @@ The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all
 
 10. **AtomicSteps** (NEW) — Every step must contain **exactly one verification point**. Flag any step whose `expected_result` bundles multiple independent assertions (e.g. a gRPC state read AND a PLC-tag value; a multi-signal snapshot like "Red BLINK, Green OFF, White ON"; "consumed AND no error logged"). `suggested_fix` = "split <TC-id> step <n> into one step per verification". Severity: High — a bundled step defeats one-verification-per-step traceability and per-step pass/fail.
 
+11. **ConfigMatrix** (NEW) — When the SRS defines a configuration parameter that changes the *execution path* (not merely a numeric/threshold value), every behavioral TC that traverses that path must exist for **each** value of the parameter — **including the basic positive / happy-path cases**, not just edge cases.
+   - Detect path-altering configs from SRS phrasing like *"For X device … / For Y device …"*, *"if Preference = A … else if = B …"*, *"in mode M1 the flow is … in mode M2 the flow is …"*. Real example: **Mapping Preference = `Mapping by Robot` | `Mapping by Load Port`** — Robot issues an explicit Map after door-open; Load-Port auto-maps *during* the door-open event (and must close-then-reopen if the door is already open). These are genuinely different step sequences, so one config tested ≠ both covered.
+   - For each such parameter, build the value set and assert that every scenario (especially every Positive scenario) has a TC per value. A happy-path covered under only one configuration is a **High** gap, even if every requirement ID is otherwise "covered" — Coverage (Job 1) checks identifier reachability; ConfigMatrix checks *behavioral duplication across path-altering configs*.
+   - Distinguish from a pure value enum (Job 1): ConfigMatrix fires only when the value **changes the steps/flow**, not when it merely changes an asserted value.
+   
+   Severity: High for a missing config-variant of any Positive/critical scenario; Medium for missing config-variant of a low-priority negative case. Emit one issue per (scenario, missing-config) pair; `suggested_fix` = "duplicate <TC-id> for <config value> with <device/mode>-specific step deltas".
+
+12. **StateRealism** (NEW) — Reject TCs that exercise **physically unreachable states** or **impossible configurations**, and flag flows that don't return a resource to its required end-state. The reviewer must first reconstruct the entity lifecycle ordering from the SRS, then test every setup/precondition against it.
+   - **Unreachable intermediate state** — derive the documented state order (e.g. carrier **load** order `Present → Placed → Clamped → Docked → Open`; **unload** is the strict reverse `Closed → UnDocked → UnClamped → Placed=false → Present=false`). A TC whose setup asserts a state that violates this order — e.g. *"Docked but NOT Clamped"* when Clamp precedes Dock — is **unreal** and must be flagged for **removal**, unless the SRS explicitly defines that partial/transitional state as reachable.
+   - **Impossible / mutually-exclusive configuration** — options the SRS presents as alternatives (e.g. *"For Robot device … For Load Port device …"*) must not be combined in one TC (e.g. *both* mapping devices active simultaneously) unless the SRS states the combination is reachable. Flag such TCs for removal.
+   - **Flow completeness / return-to-initial-state** — when the SRS says to restore a resource at end of flow (e.g. *"consider to close door after mapping"* for a cassette whose door started **closed**), the TC must include that restoring step and assert the final state. Missing-restore is a coverage defect, not a removal.
+   - Cross-check against ConfigMatrix and StateMachine: an "unreal" mixed-config or impossible-transition TC should be reported here (remove), while a *legitimately missing* config-variant or transition belongs to ConfigMatrix / StateMachine (add).
+   
+   Severity: High for a TC asserting an unreachable state or impossible config (it misleads reviewers and wastes execution); Medium for a missing return-to-initial-state step. `suggested_fix` = "remove <TC-id>: state/config unreachable per SRS lifecycle <…>" OR "append restoring step to <TC-id>: <…>".
+
 ### Severity Rubric
 
 | Severity | Examples |
@@ -778,7 +793,7 @@ The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all
   "summary": "<one-line human summary>",
   "issues": [
     {
-      "category": "Coverage" | "Mapping" | "StateMachine" | "PriorityLadder" | "APIContract" | "MergeOpportunity" | "Template" | "DiagramCoverage" | "SpecCompletenessGap" | "AtomicSteps",
+      "category": "Coverage" | "Mapping" | "StateMachine" | "PriorityLadder" | "APIContract" | "MergeOpportunity" | "Template" | "DiagramCoverage" | "SpecCompletenessGap" | "AtomicSteps" | "ConfigMatrix" | "StateRealism",
       "severity": "Critical" | "High" | "Medium" | "Low",
       "test_id": "TC-001" | null,
       "requirement_ids": ["R1", "R5"],
