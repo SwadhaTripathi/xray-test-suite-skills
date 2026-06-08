@@ -775,6 +775,8 @@ The reviewer must check each. **Paraphrase/abbreviation tolerance applies to all
    
    Severity: High for a TC asserting an unreachable state or impossible config (it misleads reviewers and wastes execution); Medium for a missing return-to-initial-state step. `suggested_fix` = "remove <TC-id>: state/config unreachable per SRS lifecycle <…>" OR "append restoring step to <TC-id>: <…>".
 
+**Presentation conventions** (apply when emitting the matrix, not a blocking job): keep **Positive and Negative tests separable** (tag each TC `Positive`/`Negative` by intent — valid-condition behavior vs. error/exclusion/failure/anomaly/boundary-rejection — so the deliverable can be split into per-polarity tabs), and keep each **Test Summary concise** (short, scannable name; move full prose into the objective). Report only as `severity: "Low"` `category: "StateRealism"` notes if violated — do not block the loop.
+
 ### Severity Rubric
 
 | Severity | Examples |

@@ -1,7 +1,7 @@
 {
   "name": "xray-test-suite",
   "description": "Full-cycle Xray test case workflow — generate test cases from requirements (Jira issue, Confluence page, local file, or pasted text), enforce one verification per step, review a traceability matrix (.xlsx) before any write, then create tests via the xray-mcp gateway (default), CSV import, or Playwright. Includes the /xray-tests slash command.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "author": {
     "name": "Swadha Tripathi"
   },
